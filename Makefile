@@ -39,7 +39,7 @@
 
 ###############################################################################
 
-NEUTRINO = neutrino-gui
+NEUTRINO = gui-neutrino
 N_BRANCH = master
 LIBSTB-HAL = libstb-hal
 LIB_BRANCH = mpx
