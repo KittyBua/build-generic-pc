@@ -39,9 +39,9 @@
 
 ###############################################################################
 
-NEUTRINO = gui-neutrino
+NEUTRINO = neutrino-gui
 N_BRANCH = master
-LIBSTB-HAL = library-stb-hal
+LIBSTB-HAL = libstb-hal
 LIB_BRANCH = mpx
 
 SRC = $(PWD)/src
@@ -50,14 +50,14 @@ DEST = $(PWD)/root
 
 LH_SRC = $(PWD)/../$(LIBSTB-HAL)
 ifeq ($(wildcard $(LH_SRC)),)
-  # library-stb-hal not present in directory above; use /src-dir
+  # libstb-hal not present in directory above; use /src-dir
   LH_SRC = $(SRC)/$(LIBSTB-HAL)
 endif
 LH_OBJ = $(OBJ)/$(LIBSTB-HAL)
 
 N_SRC = $(PWD)/../$(NEUTRINO)
 ifeq ($(wildcard $(N_SRC)),)
-  # gui-neutrino not present in directory above; use /src-dir
+  # neutrino-gui not present in directory above; use /src-dir
   N_SRC  = $(SRC)/$(NEUTRINO)
 endif
 N_OBJ  = $(OBJ)/$(NEUTRINO)
@@ -210,7 +210,7 @@ libdvbsi: $(SRC)/libdvbsi++-$(LIBDVBSI_VER).tar.bz2 | $(DEST)
 # libdvbsi is not commonly packaged for linux distributions...
 libdvbsi-git: | $(DEST)
 	rm -rf $(SRC)/libdvbsi++
-	git clone git://git.opendreambox.org/git/obi/libdvbsi++.git $(SRC)/libdvbsi++
+	git clone https://git.opendreambox.org/git/obi/libdvbsi++.git $(SRC)/libdvbsi++
 	set -e; cd $(SRC)/libdvbsi++; \
 		./autogen.sh; \
 		./configure --prefix=$(DEST); \
