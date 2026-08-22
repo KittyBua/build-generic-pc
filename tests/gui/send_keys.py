@@ -57,6 +57,35 @@ KEYS = {
     "7": "KEY_7",
     "8": "KEY_8",
     "9": "KEY_9",
+    # Letters and space, so a scenario can type text rather than only
+    # navigate. Same short form as the digits: send "A", not "KEY_A".
+    "Q": "KEY_Q",
+    "W": "KEY_W",
+    "E": "KEY_E",
+    "R": "KEY_R",
+    "T": "KEY_T",
+    "Y": "KEY_Y",
+    "U": "KEY_U",
+    "I": "KEY_I",
+    "O": "KEY_O",
+    "P": "KEY_P",
+    "A": "KEY_A",
+    "S": "KEY_S",
+    "D": "KEY_D",
+    "F": "KEY_F",
+    "G": "KEY_G",
+    "H": "KEY_H",
+    "J": "KEY_J",
+    "K": "KEY_K",
+    "L": "KEY_L",
+    "Z": "KEY_Z",
+    "X": "KEY_X",
+    "C": "KEY_C",
+    "V": "KEY_V",
+    "B": "KEY_B",
+    "N": "KEY_N",
+    "M": "KEY_M",
+    "SPACE": "KEY_SPACE",
 }
 
 # Numeric codes from linux/input-event-codes.h. Kept here rather than read from
@@ -86,6 +115,38 @@ KEY_CODES = {
     "KEY_YELLOW": 400,
     "KEY_BLUE": 401,
     "KEY_MUTE": 113,
+    # Letter keys, for the direct typing path. CRCInput::translate() passes
+    # unknown codes through unchanged and CRCInput::getUnicodeValue() indexes
+    # its table by the code, so these arrive as characters rather than as
+    # remote control functions. Three separate ranges, not one:
+    # Q-P is 16-25, A-L is 30-38, Z-M is 44-50.
+    "KEY_Q": 16,
+    "KEY_W": 17,
+    "KEY_E": 18,
+    "KEY_R": 19,
+    "KEY_T": 20,
+    "KEY_Y": 21,
+    "KEY_U": 22,
+    "KEY_I": 23,
+    "KEY_O": 24,
+    "KEY_P": 25,
+    "KEY_A": 30,
+    "KEY_S": 31,
+    "KEY_D": 32,
+    "KEY_F": 33,
+    "KEY_G": 34,
+    "KEY_H": 35,
+    "KEY_J": 36,
+    "KEY_K": 37,
+    "KEY_L": 38,
+    "KEY_Z": 44,
+    "KEY_X": 45,
+    "KEY_C": 46,
+    "KEY_V": 47,
+    "KEY_B": 48,
+    "KEY_N": 49,
+    "KEY_M": 50,
+    "KEY_SPACE": 57,
 }
 
 # struct input_event: a struct timeval, then type, code and value. Native sizes
