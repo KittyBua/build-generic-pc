@@ -44,6 +44,11 @@ KEYS = {
     # paints. Tests that need that machinery active have no other way to switch
     # it on from outside.
     "MUTE": "KEY_MUTE",
+    # menus do NOT wrap on page-up ("...but not if already at top" in
+    # menue.cpp): a few PAGEUPs land on the first entry no matter which
+    # selection the menu remembered - the reset that UP/DOWN (which do
+    # wrap) cannot provide.
+    "PAGEUP": "KEY_PAGEUP",
     # menus print a digit next to each entry and jump straight to it. Counting
     # cursor steps instead is unreliable, because a menu reopens on whatever
     # was selected last time.
@@ -86,6 +91,7 @@ KEYS = {
     "N": "KEY_N",
     "M": "KEY_M",
     "SPACE": "KEY_SPACE",
+    "BACKSPACE": "KEY_BACKSPACE",
 }
 
 # Numeric codes from linux/input-event-codes.h. Kept here rather than read from
@@ -115,6 +121,7 @@ KEY_CODES = {
     "KEY_YELLOW": 400,
     "KEY_BLUE": 401,
     "KEY_MUTE": 113,
+    "KEY_PAGEUP": 104,
     # Letter keys, for the direct typing path. CRCInput::translate() passes
     # unknown codes through unchanged and CRCInput::getUnicodeValue() indexes
     # its table by the code, so these arrive as characters rather than as
@@ -147,6 +154,7 @@ KEY_CODES = {
     "KEY_N": 49,
     "KEY_M": 50,
     "KEY_SPACE": 57,
+    "KEY_BACKSPACE": 14,
 }
 
 # struct input_event: a struct timeval, then type, code and value. Native sizes
