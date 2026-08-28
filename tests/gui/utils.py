@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from . import send_keys
+
 
 def require_binary(name: str) -> None:
     """Skip the test if the given binary is not available."""
@@ -37,6 +39,12 @@ def send_keys_skip_reason(stderr: str) -> str | None:
     Returns None for anything unrecognised, so a genuine failure still raises.
     """
     known = (
+        # The device path, not a bare "Permission denied": that would swallow an
+        # EACCES on the FIFO as a supposedly absent uinput device, and the real
+        # defect would leave as a skip. Recognising it by path holds only while
+        # evdev keeps naming the device in its message and keeps opening this
+        # one - both pinned in test_input_helpers.py.
+        send_keys.UINPUT_DEVICE,
         "has no reader",
         "not found. Ensure Neutrino is running",
         "is not a FIFO",
