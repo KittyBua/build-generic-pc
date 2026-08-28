@@ -112,13 +112,15 @@ def fails_instead_of_hanging(seconds: float = 5):
         try:
             signal.setitimer(signal.ITIMER_REAL, 0)
         finally:
-            # SIG_DFL when getsignal() cannot name the previous handler - one
-            # installed from C answers None. Leaving `blocked` in place there
-            # would be the worst of the options: the next line rearms the
-            # timer, and the expiry would land in a closure over a block that
-            # finished long ago, failing an unrelated part of the run.
+            # getsignal() answers None for a handler installed from C, and then
+            # neither option is good: leaving `blocked` in place fails an
+            # unrelated part of the run for a call that returned long ago, and
+            # SIG_DFL on SIGALRM terminates the process. So restore SIG_DFL and
+            # leave the timer disarmed - the two must not be split. A lost
+            # outer deadline is a weaker guard; an armed SIG_DFL is a dead
+            # pytest with no report at all.
             signal.signal(signal.SIGALRM, previous if previous is not None else signal.SIG_DFL)
-            if outer_left:
+            if outer_left and previous is not None:
                 # This branch only runs when the outer deadline was the later
                 # one, so `rest` is positive in the ordinary case. The clamp is
                 # for the exception: the guard raised, the body swallowed it,
@@ -249,9 +251,10 @@ def test_a_reader_that_leaves_mid_write_fails_and_is_named(fifo: str, monkeypatc
             replay_fifo(["KEY_OK"] * 40)
     finally:
         closer.join(timeout=25)
-        # A thread that outlived the test would close its descriptor after
-        # pytest had recycled the number.
-        assert not closer.is_alive(), "the closing thread outlived the test"
+        # Recorded here, asserted below: an assert inside the finally would
+        # replace whatever the body was really failing on.
+        outlived = closer.is_alive()
+    assert not outlived, "the closing thread outlived the test"
     assert "went away while keys were being sent" in str(exc.value)
     assert utils.send_keys_skip_reason(str(exc.value)) is None, "this must not turn into a skip"
 
@@ -408,27 +411,32 @@ def test_without_a_fifo_uinput_is_still_used(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_missing_framebuffer_skips(past_the_binary_check, tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("FRAMEBUFFER", str(tmp_path / "no-such-fb"))
+    device = tmp_path / "no-such-fb"
+    monkeypatch.setenv("FRAMEBUFFER", str(device))
     with pytest.raises(pytest.skip.Exception) as exc:
         utils.capture_framebuffer(tmp_path / "shot.png", delay=0)
     assert "no readable framebuffer" in str(exc.value)
+    # Naming the device is what catches a helper that stopped reading
+    # FRAMEBUFFER at all and always looks at the default.
+    assert str(device) in str(exc.value), exc.value
 
 
 def test_empty_framebuffer_variable_falls_back_like_fbgrab(past_the_binary_check, tmp_path: Path, monkeypatch) -> None:
     # fbgrab resolves ${FRAMEBUFFER:-/dev/fb0}, so an empty value must name the
     # default device here as well instead of an empty path.
     #
-    # Asserted on the device that gets looked at, not on the outcome. Sorting
-    # the three possible outcomes into pass and fail is what a host with a
-    # working framebuffer breaks: there the capture simply succeeds, which is
-    # correct and says nothing either way. This holds on every host.
+    # Asserted on the device that gets asked about, and the answer is forced to
+    # "not readable" so the call always stops at the skip. Two earlier shapes
+    # of this test sorted real outcomes into pass and fail and were wrong on a
+    # host with a working framebuffer, then on one without fbgrab. There is no
+    # outcome to sort here, nothing is executed, and no screenshot is taken as
+    # a side effect of a unit test.
     monkeypatch.setenv("FRAMEBUFFER", "")
-    looked_at: list = []
-    real_access = os.access
-    monkeypatch.setattr(os, "access", lambda path, mode: looked_at.append(path) or real_access(path, mode))
-    with contextlib.suppress(pytest.skip.Exception, subprocess.CalledProcessError):
+    asked_about: list = []
+    monkeypatch.setattr(os, "access", lambda path, mode: asked_about.append(path) or False)
+    with pytest.raises(pytest.skip.Exception):
         utils.capture_framebuffer(tmp_path / "shot.png", delay=0)
-    assert "/dev/fb0" in looked_at, looked_at
+    assert asked_about == ["/dev/fb0"], asked_about
 
 
 def test_readable_framebuffer_reaches_fbgrab(fbgrab, tmp_path: Path, monkeypatch) -> None:
@@ -445,6 +453,40 @@ def test_readable_framebuffer_reaches_fbgrab(fbgrab, tmp_path: Path, monkeypatch
             utils.capture_framebuffer(tmp_path / "shot.png", delay=0)
     except pytest.skip.Exception as exc:
         pytest.fail(f"the guard skipped instead of letting fbgrab run: {exc}")
+
+
+def a_failed_send_keys(stderr: str) -> subprocess.CalledProcessError:
+    """A CalledProcessError shaped like the one the three GUI suites catch."""
+    return subprocess.CalledProcessError(
+        1, [sys.executable, "-m", "tests.gui.send_keys"], output=b"", stderr=stderr.encode()
+    )
+
+
+def test_a_missing_precondition_skips_the_caller(tmp_path: Path, monkeypatch) -> None:
+    # fail_or_skip() is the one place that decides this for all three GUI
+    # suites, and nothing exercised it: turning its pytest.fail into a
+    # pytest.skip left the whole tree green, which is the fail-open this file
+    # exists to rule out. Both directions are pinned here.
+    stderr = gap_missing_fifo(tmp_path, monkeypatch)
+    with pytest.raises(pytest.skip.Exception):
+        utils.fail_or_skip(a_failed_send_keys(stderr))
+
+
+def test_a_real_defect_fails_the_caller_and_carries_the_diagnosis() -> None:
+    stderr = "PermissionError: [Errno 13] Permission denied: '/tmp/neutrino.input'\n"
+    # The skip has to be caught by hand. pytest.skip's exception derives from
+    # BaseException, so pytest.raises() lets it through and this test would
+    # report SKIPPED - green - in exactly the case it exists to catch. Written
+    # the obvious way first, and the mutation proved it: with fail_or_skip()
+    # turned into a blanket skip the whole tree still passed.
+    try:
+        with pytest.raises(pytest.fail.Exception) as exc:
+            utils.fail_or_skip(a_failed_send_keys(stderr))
+    except pytest.skip.Exception as skipped:
+        pytest.fail(f"a real defect was filed away as a missing precondition: {skipped}")
+    # And the child's own words come along: a bare re-raise would report the
+    # command and the exit status and drop this line.
+    assert "Permission denied" in str(exc.value)
 
 
 def test_a_broken_fifo_permission_is_not_filed_as_a_missing_uinput() -> None:
@@ -563,8 +605,10 @@ def an_outer_deadline(seconds: float, interval: float):
         yield fired
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
-        if outer_left:
+        # Same None case as in the guard above, and the same coupling: no named
+        # handler, no armed timer.
+        signal.signal(signal.SIGALRM, previous_handler if previous_handler is not None else signal.SIG_DFL)
+        if outer_left and previous_handler is not None:
             # The remaining time, not the value captured on entry - putting the
             # latter back would hand a real enclosing deadline more time than
             # it had, which is the mistake this stub is here to help catch.
@@ -591,6 +635,7 @@ def test_the_guard_turns_a_blocking_call_into_a_failure(fifo: str) -> None:
     finally:
         rescue.cancel()
         rescue.join(timeout=5)
+        assert not rescue.is_alive(), "the rescue reader outlived the test"
 
 
 def test_the_guard_hands_an_outer_deadline_back_intact() -> None:
@@ -604,11 +649,15 @@ def test_the_guard_hands_an_outer_deadline_back_intact() -> None:
     # and never touches the timer - which would make this assertion true
     # without any restoring code behind it.
     with an_outer_deadline(5.0, 2.5) as fired:
-        with fails_instead_of_hanging(0.5):
-            pass
+        with fails_instead_of_hanging(0.4):
+            # Long enough that the remaining time and the value captured on
+            # entry differ measurably. With an empty body the two are equal by
+            # construction and the bound below accepts either, so putting the
+            # entry value back would go unnoticed.
+            time.sleep(0.3)
         left, interval = signal.getitimer(signal.ITIMER_REAL)
         assert interval == pytest.approx(2.5), f"repeat interval came back as {interval}"
-        assert 0 < left <= 5.0, f"outer deadline came back as {left}s"
+        assert 0 < left <= 5.0 - 0.25, f"outer deadline came back as {left}s, not ~4.7s"
         assert not fired
 
 
