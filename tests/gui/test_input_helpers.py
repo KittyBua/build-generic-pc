@@ -107,9 +107,13 @@ def fails_instead_of_hanging(seconds: float = 5):
         signal.signal(signal.SIGALRM, previous)
         if outer_left:
             rest = outer_left - (time.monotonic() - started)
-            # An outer deadline that ran out in here has to fire, not be
-            # rearmed for another full round: setitimer(0) would disarm it.
-            signal.setitimer(signal.ITIMER_REAL, max(rest, 1e-6), outer_interval)
+            # Only while it still has time left. An outer deadline that ran out
+            # in here was already handed to its owner by blocked(), and arming
+            # it again for a sliver would deliver the same expiry twice - a
+            # second thread dump on the way out of the first one, burying the
+            # timeout that actually happened.
+            if rest > 0:
+                signal.setitimer(signal.ITIMER_REAL, rest, outer_interval)
 
 
 @pytest.fixture(name="fbgrab")
@@ -538,6 +542,10 @@ def test_the_guard_lets_an_earlier_outer_deadline_win() -> None:
             # against a guard that postponed it for the full 30 seconds - the
             # very thing this test is about.
             assert fired, "the outer deadline did not fire while the guard was active"
+    # And exactly once. Rearming an expiry that has already been delivered
+    # would dump the threads a second time, on the way out of the first dump,
+    # and bury the timeout that really happened.
+    assert len(fired) == 1, f"the outer deadline was delivered {len(fired)} times"
 
 
 def test_send_keys_module_runs_standalone() -> None:
