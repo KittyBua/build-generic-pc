@@ -10,9 +10,11 @@ import errno
 import inspect
 import os
 import signal
+import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -63,7 +65,7 @@ def drain(fifo_path: str, send) -> bytes:
 
 
 @contextlib.contextmanager
-def fails_instead_of_hanging(seconds: int = 5):
+def fails_instead_of_hanging(seconds: float = 5):
     """Turn a call that blocks into a failing test.
 
     These helpers exist so a missing reader cannot stall the suite. A test for
@@ -72,34 +74,64 @@ def fails_instead_of_hanging(seconds: int = 5):
     it, and a hang says far less than a red test.
     """
 
+    # ITIMER_REAL rather than alarm(): pytest-timeout arms this timer with a
+    # fractional deadline, and alarm() both rounds it to whole seconds and
+    # drops any repeat interval.
+    outer_left, outer_interval = signal.getitimer(signal.ITIMER_REAL)
+    started = time.monotonic()
+    # Read before installing, not from signal.signal()'s return value: the
+    # outer timer is still running at that moment and could fire in between,
+    # into a handler that has not been given its predecessor yet.
+    previous = signal.getsignal(signal.SIGALRM)
+
     def blocked(signum, frame):
+        # Whichever deadline was the earlier one keeps its meaning. If the
+        # outer one ran out, it belongs to whoever set it - pytest-timeout
+        # dumps every thread's stack here, and replacing that with this
+        # guard's one-line message would cost the better diagnosis.
+        if outer_left and time.monotonic() - started >= outer_left:
+            if callable(previous):
+                return previous(signum, frame)
         raise AssertionError(f"call still had not returned after {seconds}s - it blocked")
 
-    previous = signal.signal(signal.SIGALRM, blocked)
-    started = time.monotonic()
-    # alarm() returns what was left of an alarm already running - pytest-timeout
-    # sets one, and dropping it would silently disarm the outer limit for the
-    # rest of the test. Put the remainder back, minus the time spent here.
-    outer_left = signal.alarm(seconds)
+    signal.signal(signal.SIGALRM, blocked)
+    # Arming for the nearer of the two is what keeps an outer limit effective
+    # *while* the guard is active. Arming for `seconds` alone would postpone a
+    # --timeout=1 run to five seconds, and a nested guard would postpone it
+    # further still.
+    signal.setitimer(signal.ITIMER_REAL, min(seconds, outer_left) if outer_left else seconds)
     try:
         yield
     finally:
-        signal.alarm(0)
+        signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
         if outer_left:
             rest = outer_left - (time.monotonic() - started)
-            signal.alarm(max(1, int(rest)))
+            # An outer deadline that ran out in here has to fire, not be
+            # rearmed for another full round: setitimer(0) would disarm it.
+            signal.setitimer(signal.ITIMER_REAL, max(rest, 1e-6), outer_interval)
 
 
 @pytest.fixture(name="fbgrab")
 def fbgrab_fixture() -> None:
-    # capture_framebuffer() checks for the binary before it looks at the
-    # device, so without this every framebuffer test would trip over that skip
-    # first and fail on its own message assertion instead of testing anything.
-    # hosttools.mk treats a missing fbgrab as tolerable, so this is a state the
-    # project expects to happen.
+    # For the cases that have to let fbgrab run: capture_framebuffer() checks
+    # for the binary before it looks at the device, so without this they would
+    # trip over that skip first and fail on their own message assertion instead
+    # of testing anything. hosttools.mk treats a missing fbgrab as tolerable,
+    # so this is a state the project expects to happen.
     if utils.shutil.which("fbgrab") is None:
         pytest.skip("fbgrab binary is required for this test")
+
+
+@pytest.fixture(name="past_the_binary_check")
+def past_the_binary_check_fixture(monkeypatch) -> None:
+    """Reach the device classification without needing fbgrab installed.
+
+    Requiring the real binary would take the classification test off every host
+    that has no fbgrab - and that is a host the project accepts. The case below
+    never reaches the binary anyway: it stops at the device check.
+    """
+    monkeypatch.setattr(utils, "require_binary", lambda name: None)
 
 
 @pytest.fixture(name="fifo")
@@ -136,6 +168,65 @@ def test_readerless_fifo_skips_instead_of_blocking(fifo: str, monkeypatch) -> No
     with fails_instead_of_hanging(), pytest.raises(SystemExit) as exc:
         replay_fifo(["KEY_MENU"])
     assert "has no reader" in str(exc.value)
+
+
+def test_a_file_swapped_in_after_the_check_is_refused(tmp_path: Path, monkeypatch) -> None:
+    # The path is inspected first and opened afterwards. A regular file accepts
+    # a non-blocking write-only open without complaint, so if only the name is
+    # trusted the keys go into a file nobody reads and the run falls over much
+    # later, at the screenshot. Provoked by letting the first look report a
+    # FIFO while the path really holds a plain file.
+    plain = tmp_path / "swapped"
+    plain.write_text("")
+    monkeypatch.setenv("NEUTRINO_INPUT_FIFO", str(plain))
+
+    real_stat = os.stat
+
+    class LooksLikeAFifo:
+        st_mode = stat.S_IFIFO | 0o600
+
+    monkeypatch.setattr(
+        os,
+        "stat",
+        lambda path, *a, **kw: LooksLikeAFifo() if str(path) == str(plain) else real_stat(path, *a, **kw),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        replay_fifo(["KEY_OK"])
+    assert "is not a FIFO" in str(exc.value)
+    assert plain.read_text() == ""  # and nothing was written into it
+
+
+def test_a_reader_that_leaves_mid_write_fails_and_is_named(fifo: str, monkeypatch) -> None:
+    # Both halves matter here. A bare BrokenPipeError names nothing, so the
+    # situation gets a sentence. But it must not become a skip: a reader that
+    # was there at the open and left mid-write is a Neutrino that stopped -
+    # possibly because of the key just sent - and reporting that as a missing
+    # precondition would hide a GUI regression behind a green run.
+    monkeypatch.setenv("NEUTRINO_INPUT_FIFO", fifo)
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+
+    def close_once_the_writer_is_past_its_open() -> None:
+        # Waiting for real bytes is what makes this deterministic: closing on a
+        # timer could land before the open and provoke the ENXIO case instead,
+        # which carries a similar message and would let this pass without ever
+        # reaching the write path. A read on a FIFO nobody writes to yet
+        # answers 0 straight away rather than blocking, so this has to keep
+        # asking until an event actually arrives.
+        os.set_blocking(read_fd, True)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if os.read(read_fd, EVENT_SIZE):
+                break
+            time.sleep(0.005)
+        os.close(read_fd)
+
+    threading.Thread(target=close_once_the_writer_is_past_its_open, daemon=True).start()
+
+    with fails_instead_of_hanging(30), pytest.raises(RuntimeError) as exc:
+        replay_fifo(["KEY_OK"] * 40)
+    assert "went away while keys were being sent" in str(exc.value)
+    assert utils.send_keys_skip_reason(str(exc.value)) is None, "this must not turn into a skip"
 
 
 def test_other_open_errors_are_not_filed_as_missing_reader(fifo: str, monkeypatch) -> None:
@@ -284,7 +375,7 @@ def test_without_a_fifo_uinput_is_still_used(tmp_path: Path, monkeypatch) -> Non
     assert used == [["KEY_MENU"]]
 
 
-def test_missing_framebuffer_skips(fbgrab, tmp_path: Path, monkeypatch) -> None:
+def test_missing_framebuffer_skips(past_the_binary_check, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FRAMEBUFFER", str(tmp_path / "no-such-fb"))
     with pytest.raises(pytest.skip.Exception) as exc:
         utils.capture_framebuffer(tmp_path / "shot.png", delay=0)
@@ -397,6 +488,56 @@ def test_evdev_names_the_device_in_its_error() -> None:
     with pytest.raises(evdev.UInputError) as exc:
         evdev.UInput(devnode=bogus)
     assert bogus in str(exc.value)
+
+
+@contextlib.contextmanager
+def an_outer_deadline(seconds: float, interval: float):
+    """Stand in for pytest-timeout, and put back whatever was there before.
+
+    Saving only the handler and cancelling the timer - the shape this test had
+    first - would disarm the deadline pytest-timeout set for this very test.
+    """
+    fired: list = []
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    signal.signal(signal.SIGALRM, lambda *_: fired.append(True))
+    signal.setitimer(signal.ITIMER_REAL, seconds, interval)
+    try:
+        yield fired
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def test_the_guard_hands_an_outer_deadline_back_intact() -> None:
+    # pytest-timeout arms ITIMER_REAL, which carries a fractional deadline and
+    # a repeat interval. alarm() can represent neither: it rounds up to whole
+    # seconds and has no interval at all. The interval is what makes this
+    # assertion independent of wall-clock timing - a busy machine changes how
+    # much of the deadline is left, but never whether the interval survived.
+    with an_outer_deadline(5.0, 2.5) as fired:
+        with fails_instead_of_hanging(30):
+            pass
+        left, interval = signal.getitimer(signal.ITIMER_REAL)
+        assert interval == pytest.approx(2.5), f"repeat interval came back as {interval}"
+        assert 0 < left <= 5.0, f"outer deadline came back as {left}s"
+        assert not fired
+
+
+def test_the_guard_lets_an_earlier_outer_deadline_win() -> None:
+    # Restoring on the way out is not enough: while the guard is active its own
+    # deadline must not postpone a shorter outer one. Arming for five seconds
+    # here would let a --timeout=0.2 run sit for five, and the diagnosis would
+    # come from the wrong owner.
+    with an_outer_deadline(0.2, 0) as fired:
+        with fails_instead_of_hanging(30):
+            time.sleep(0.5)
+            # Asserted here, not after the guard: on the way out the guard puts
+            # an outer deadline that has already run out back with a minimal
+            # delay, so it fires either way. Checking afterwards would pass
+            # against a guard that postponed it for the full 30 seconds - the
+            # very thing this test is about.
+            assert fired, "the outer deadline did not fire while the guard was active"
 
 
 def test_send_keys_module_runs_standalone() -> None:

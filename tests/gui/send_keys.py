@@ -258,7 +258,33 @@ def replay_fifo(keys: List[str]) -> None:
         raise SystemExit(
             f"FIFO '{fifo_path}' has no reader. Ensure Neutrino is running (make run) or set NEUTRINO_INPUT_FIFO."
         ) from exc
+    # The path was inspected before the open and can be replaced in between.
+    # A regular file accepts O_WRONLY|O_NONBLOCK without complaint, so ask the
+    # descriptor that was actually opened rather than trusting the earlier
+    # look at the name - otherwise the keys land in a file nobody reads and
+    # the run falls over much later, at the screenshot.
+    if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise SystemExit(
+            f"'{fifo_path}' is not a FIFO. Point NEUTRINO_INPUT_FIFO at Neutrino's input FIFO."
+        )
     os.set_blocking(fd, True)
+    try:
+        write_events(fd, keys)
+    except BrokenPipeError as exc:
+        # Deliberately not a SystemExit, and deliberately worded without the
+        # marker that makes a FIFO problem skippable: a reader that was there
+        # at the open and left while the keys were going out is a Neutrino that
+        # stopped mid-run - possibly *because* of the key just sent. Filing
+        # that away as a missing precondition would report a GUI regression as
+        # a skipped test. It only gets a name here, not an excuse.
+        raise RuntimeError(
+            f"the process reading '{fifo_path}' went away while keys were being sent - "
+            "Neutrino stopped or crashed mid-run"
+        ) from exc
+
+
+def write_events(fd: int, keys: List[str]) -> None:
     with os.fdopen(fd, "wb") as fifo:
         for key_name in keys:
             code = KEY_CODES[key_name]
