@@ -52,13 +52,18 @@ def drain(fifo_path: str, send) -> bytes:
     """
     read_fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
     try:
+        # The read is inside the guard too, not only the write. read() returns
+        # at EOF, so it depends on every write descriptor being closed - true
+        # today because write_events() owns the descriptor, and exactly the
+        # kind of thing a later change breaks. A helper that exists to keep a
+        # hang out of the suite must not be able to hang the suite itself.
         with fails_instead_of_hanging():
             send()
-        os.set_blocking(read_fd, True)
-        handle = os.fdopen(read_fd, "rb")
-        read_fd = -1  # the file object owns it now
-        with handle:
-            return handle.read()
+            os.set_blocking(read_fd, True)
+            handle = os.fdopen(read_fd, "rb")
+            read_fd = -1  # the file object owns it now
+            with handle:
+                return handle.read()
     finally:
         if read_fd != -1:
             os.close(read_fd)
@@ -75,45 +80,45 @@ def fails_instead_of_hanging(seconds: float = 5):
     """
 
     # ITIMER_REAL rather than alarm(): pytest-timeout arms this timer with a
-    # fractional deadline, and alarm() both rounds it to whole seconds and
-    # drops any repeat interval.
+    # fractional deadline, and alarm() can represent neither that nor its
+    # repeat interval.
     outer_left, outer_interval = signal.getitimer(signal.ITIMER_REAL)
-    started = time.monotonic()
-    # Read before installing, not from signal.signal()'s return value: the
-    # outer timer is still running at that moment and could fire in between,
-    # into a handler that has not been given its predecessor yet.
-    previous = signal.getsignal(signal.SIGALRM)
+
+    # Something stricter is already watching - stand aside entirely. Taking
+    # over here is what made every earlier version of this helper complicated
+    # and wrong in turn: it had to hand an expiry back to its owner, avoid
+    # delivering it twice, and rearm itself afterwards, and it got each of
+    # those wrong once. Not touching the timer has none of those failure modes,
+    # and costs nothing: the outer deadline fails the test either way, with a
+    # better diagnosis than this one-liner.
+    if outer_left and outer_left <= seconds:
+        yield
+        return
 
     def blocked(signum, frame):
-        # Whichever deadline was the earlier one keeps its meaning. If the
-        # outer one ran out, it belongs to whoever set it - pytest-timeout
-        # dumps every thread's stack here, and replacing that with this
-        # guard's one-line message would cost the better diagnosis.
-        if outer_left and time.monotonic() - started >= outer_left:
-            if callable(previous):
-                return previous(signum, frame)
         raise AssertionError(f"call still had not returned after {seconds}s - it blocked")
 
+    previous = signal.getsignal(signal.SIGALRM)
+    started = time.monotonic()
     signal.signal(signal.SIGALRM, blocked)
-    # Arming for the nearer of the two is what keeps an outer limit effective
-    # *while* the guard is active. Arming for `seconds` alone would postpone a
-    # --timeout=1 run to five seconds, and a nested guard would postpone it
-    # further still.
-    signal.setitimer(signal.ITIMER_REAL, min(seconds, outer_left) if outer_left else seconds)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
         yield
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
-        if outer_left:
-            rest = outer_left - (time.monotonic() - started)
-            # Only while it still has time left. An outer deadline that ran out
-            # in here was already handed to its owner by blocked(), and arming
-            # it again for a sliver would deliver the same expiry twice - a
-            # second thread dump on the way out of the first one, burying the
-            # timeout that actually happened.
-            if rest > 0:
-                signal.setitimer(signal.ITIMER_REAL, rest, outer_interval)
+        # Disarm before restoring, and restore even if disarming throws: a
+        # handler left installed here would outlive the guard and fire into a
+        # closure over a finished block.
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            if previous is not None:  # a handler installed from C
+                signal.signal(signal.SIGALRM, previous)
+            if outer_left:
+                # Strictly positive: this branch only runs when the outer
+                # deadline was the later one, so it still has time left even
+                # after this guard used up all of its own.
+                rest = outer_left - (time.monotonic() - started)
+                signal.setitimer(signal.ITIMER_REAL, max(rest, 1e-3), outer_interval)
 
 
 @pytest.fixture(name="fbgrab")
@@ -162,7 +167,7 @@ def test_a_plain_file_at_the_fifo_path_is_refused(tmp_path: Path, monkeypatch) -
     with pytest.raises(SystemExit) as exc:
         replay_fifo(["KEY_MENU"])
     assert "is not a FIFO" in str(exc.value)
-    assert plain.read_text() == ""  # and nothing was written into it
+    assert plain.read_bytes() == b""  # and nothing was written into it
 
 
 def test_readerless_fifo_skips_instead_of_blocking(fifo: str, monkeypatch) -> None:
@@ -198,7 +203,7 @@ def test_a_file_swapped_in_after_the_check_is_refused(tmp_path: Path, monkeypatc
     with pytest.raises(SystemExit) as exc:
         replay_fifo(["KEY_OK"])
     assert "is not a FIFO" in str(exc.value)
-    assert plain.read_text() == ""  # and nothing was written into it
+    assert plain.read_bytes() == b""  # and nothing was written into it
 
 
 def test_a_reader_that_leaves_mid_write_fails_and_is_named(fifo: str, monkeypatch) -> None:
@@ -217,18 +222,26 @@ def test_a_reader_that_leaves_mid_write_fails_and_is_named(fifo: str, monkeypatc
         # reaching the write path. A read on a FIFO nobody writes to yet
         # answers 0 straight away rather than blocking, so this has to keep
         # asking until an event actually arrives.
-        os.set_blocking(read_fd, True)
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            if os.read(read_fd, EVENT_SIZE):
-                break
-            time.sleep(0.005)
-        os.close(read_fd)
+        try:
+            os.set_blocking(read_fd, True)
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                if os.read(read_fd, EVENT_SIZE):
+                    break
+                time.sleep(0.005)
+        finally:
+            # Also on the way out of a raising read: the descriptor points into
+            # tmp_path and would otherwise be held for the life of the process.
+            os.close(read_fd)
 
-    threading.Thread(target=close_once_the_writer_is_past_its_open, daemon=True).start()
+    closer = threading.Thread(target=close_once_the_writer_is_past_its_open, daemon=True)
+    closer.start()
 
-    with fails_instead_of_hanging(30), pytest.raises(RuntimeError) as exc:
-        replay_fifo(["KEY_OK"] * 40)
+    try:
+        with fails_instead_of_hanging(30), pytest.raises(RuntimeError) as exc:
+            replay_fifo(["KEY_OK"] * 40)
+    finally:
+        closer.join(timeout=25)
     assert "went away while keys were being sent" in str(exc.value)
     assert utils.send_keys_skip_reason(str(exc.value)) is None, "this must not turn into a skip"
 
@@ -241,8 +254,13 @@ def test_other_open_errors_are_not_filed_as_missing_reader(fifo: str, monkeypatc
 
     monkeypatch.setattr(os, "open", refuse)
     # Must surface as the permission problem it is, not as a skip reason.
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionError) as exc:
         replay_fifo(["KEY_MENU"])
+    # The other half of the same contract, which nothing joined up before: a
+    # caller sees this as text on the child's stderr, and the classifier has to
+    # leave it alone there too. Provoked from a real EACCES rather than from a
+    # sentence written here.
+    assert utils.send_keys_skip_reason(f"PermissionError: {exc.value}") is None
 
 
 def test_keys_reach_a_live_reader(fifo: str, monkeypatch) -> None:
@@ -396,6 +414,9 @@ def test_empty_framebuffer_variable_falls_back_like_fbgrab(fbgrab, tmp_path: Pat
         assert "/dev/fb0" in str(exc)
     except subprocess.CalledProcessError:
         pass  # a real framebuffer exists and fbgrab ran - also fine
+    else:
+        # Returning normally would leave this test asserting nothing at all.
+        pytest.fail("capture_framebuffer() neither named /dev/fb0 nor reached fbgrab")
 
 
 def test_readable_framebuffer_reaches_fbgrab(fbgrab, tmp_path: Path, monkeypatch) -> None:
@@ -403,8 +424,15 @@ def test_readable_framebuffer_reaches_fbgrab(fbgrab, tmp_path: Path, monkeypatch
     # the call through and fbgrab has to be the one that fails. Otherwise a
     # genuine capture failure would disappear as a skip.
     monkeypatch.setenv("FRAMEBUFFER", "/dev/null")
-    with pytest.raises(subprocess.CalledProcessError):
-        utils.capture_framebuffer(tmp_path / "shot.png", delay=0)
+    # pytest.skip.Exception derives from BaseException, so pytest.raises() lets
+    # it through and the test would report SKIPPED - green - in exactly the
+    # case it exists to catch: a guard that skips instead of letting the
+    # capture fail. Caught by hand for that reason.
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            utils.capture_framebuffer(tmp_path / "shot.png", delay=0)
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"the guard skipped instead of letting fbgrab run: {exc}")
 
 
 def test_a_broken_fifo_permission_is_not_filed_as_a_missing_uinput() -> None:
@@ -449,6 +477,18 @@ def gap_plain_file(tmp_path: Path, monkeypatch) -> str:
     plain = tmp_path / "not-a-fifo"
     plain.write_text("")
     return fifo_stderr(plain, monkeypatch)
+
+
+def test_the_uinput_marker_is_a_specific_device_path() -> None:
+    # The classification searches stderr for this constant, so its *value* is
+    # part of the contract, not just its presence. An empty string - or any
+    # prefix short enough to appear in unrelated output - would make
+    # send_keys_skip_reason() match everything and turn every real defect into
+    # a skip. The two tests that ask evdev itself both need evdev installed;
+    # this one holds on the host the hard-coded key table exists for.
+    assert UINPUT_DEVICE.startswith("/dev/"), UINPUT_DEVICE
+    assert len(UINPUT_DEVICE) > len("/dev/"), UINPUT_DEVICE
+    assert utils.send_keys_skip_reason("nothing to do with input devices") is None
 
 
 def gap_unwritable_uinput(tmp_path: Path, monkeypatch) -> str:
@@ -519,8 +559,11 @@ def test_the_guard_hands_an_outer_deadline_back_intact() -> None:
     # seconds and has no interval at all. The interval is what makes this
     # assertion independent of wall-clock timing - a busy machine changes how
     # much of the deadline is left, but never whether the interval survived.
+    # The guard's own deadline has to be the shorter one, or it stands aside
+    # and never touches the timer - which would make this assertion true
+    # without any restoring code behind it.
     with an_outer_deadline(5.0, 2.5) as fired:
-        with fails_instead_of_hanging(30):
+        with fails_instead_of_hanging(0.5):
             pass
         left, interval = signal.getitimer(signal.ITIMER_REAL)
         assert interval == pytest.approx(2.5), f"repeat interval came back as {interval}"
@@ -554,5 +597,8 @@ def test_send_keys_module_runs_standalone() -> None:
     result = subprocess.run(
         [sys.executable, "-c", "import tests.gui.send_keys"],
         capture_output=True,
+        # -c prepends the *current* directory, so without this the test says
+        # "send_keys is broken" whenever pytest happens to run from elsewhere.
+        cwd=Path(__file__).resolve().parents[2],
     )
     assert result.returncode == 0, result.stderr.decode(errors="ignore")
