@@ -28,15 +28,14 @@ def test_main_menu_title(tmp_path: Path) -> None:
     except FileNotFoundError:
         pytest.skip("python3 not available to replay keys")
     except subprocess.CalledProcessError as exc:
+        # Classified in one place, the way the other GUI tests do it. The copy
+        # that used to live here also skipped on a bare "Permission denied",
+        # which turned an EACCES on the FIFO - a real defect - into "uinput is
+        # missing" and filed it away as an environment gap.
         err = (exc.stderr or b"").decode(errors="ignore")
-        if "cannot be opened for writing" in err or "Permission denied" in err:
-            pytest.skip("uinput device not writable - run as root or load uinput")
-        # Both shapes: no FIFO at all, and a FIFO left behind by an earlier run
-        # with nothing reading it. The path is configurable through
-        # NEUTRINO_INPUT_FIFO, so matching the default one literally missed the
-        # case as well.
-        if "FIFO" in err and ("not found" in err or "has no reader" in err):
-            pytest.skip("Neutrino FIFO unavailable – start Neutrino (make run / run-now) before running GUI tests")
+        reason = utils.send_keys_skip_reason(err)
+        if reason:
+            pytest.skip(reason)
         raise
     except SystemExit as exc:  # send_keys handles missing evdev
         pytest.skip(str(exc))
