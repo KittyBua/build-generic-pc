@@ -55,15 +55,7 @@ def _press(key: str) -> None:
     except FileNotFoundError:
         pytest.skip("python3 not available to replay keys")
     except subprocess.CalledProcessError as exc:
-        err = (exc.stderr or b"").decode(errors="ignore")
-        reason = utils.send_keys_skip_reason(err)
-        if reason:
-            pytest.skip(reason)
-        # Not a bare re-raise: CalledProcessError.__str__ carries only the
-        # command and the exit status, and stderr is a local pytest does not
-        # print. The diagnosis send_keys went to the trouble of writing would
-        # never reach anyone.
-        pytest.fail(f"send_keys failed and the reason was not an environment gap:\n{err}")
+        utils.fail_or_skip(exc)
 
 
 def _shot(tmp_path: Path, name: str) -> Path:

@@ -56,6 +56,23 @@ def send_keys_skip_reason(stderr: str) -> str | None:
     return None
 
 
+def fail_or_skip(exc: subprocess.CalledProcessError) -> None:
+    """Skip a send_keys failure that is a missing precondition, fail the rest.
+
+    Kept here rather than repeated in every caller. A bare re-raise reports
+    only the command and the exit status - CalledProcessError carries stderr in
+    an attribute its message ignores, and pytest does not print the local
+    holding it, so the sentence send_keys went to the trouble of writing would
+    never reach anyone. Raised from inside an `except` block, so the original
+    exception still shows as the cause.
+    """
+    err = (exc.stderr or b"").decode(errors="ignore")
+    reason = send_keys_skip_reason(err)
+    if reason:
+        pytest.skip(reason)
+    pytest.fail(f"send_keys failed and the reason was not an environment gap:\n{err}")
+
+
 def capture_framebuffer(destination: Path, delay: float = 0.5) -> None:
     """Capture a framebuffer screenshot using fbgrab."""
     require_binary("fbgrab")

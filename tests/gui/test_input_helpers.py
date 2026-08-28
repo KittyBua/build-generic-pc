@@ -80,8 +80,9 @@ def fails_instead_of_hanging(seconds: float = 5):
     """
 
     # ITIMER_REAL rather than alarm(): pytest-timeout arms this timer with a
-    # fractional deadline, and alarm() can represent neither that nor its
-    # repeat interval.
+    # fractional deadline, which alarm() rounds to whole seconds. The repeat
+    # interval is carried through as well - pytest-timeout does not set one,
+    # but this timer is process-wide and the next owner may.
     outer_left, outer_interval = signal.getitimer(signal.ITIMER_REAL)
 
     # Something stricter is already watching - stand aside entirely. Taking
@@ -111,12 +112,18 @@ def fails_instead_of_hanging(seconds: float = 5):
         try:
             signal.setitimer(signal.ITIMER_REAL, 0)
         finally:
-            if previous is not None:  # a handler installed from C
-                signal.signal(signal.SIGALRM, previous)
+            # SIG_DFL when getsignal() cannot name the previous handler - one
+            # installed from C answers None. Leaving `blocked` in place there
+            # would be the worst of the options: the next line rearms the
+            # timer, and the expiry would land in a closure over a block that
+            # finished long ago, failing an unrelated part of the run.
+            signal.signal(signal.SIGALRM, previous if previous is not None else signal.SIG_DFL)
             if outer_left:
-                # Strictly positive: this branch only runs when the outer
-                # deadline was the later one, so it still has time left even
-                # after this guard used up all of its own.
+                # This branch only runs when the outer deadline was the later
+                # one, so `rest` is positive in the ordinary case. The clamp is
+                # for the exception: the guard raised, the body swallowed it,
+                # and the outer deadline ran out in the meantime. setitimer(0)
+                # would silently disarm it, so it fires straight away instead.
                 rest = outer_left - (time.monotonic() - started)
                 signal.setitimer(signal.ITIMER_REAL, max(rest, 1e-3), outer_interval)
 
@@ -242,6 +249,9 @@ def test_a_reader_that_leaves_mid_write_fails_and_is_named(fifo: str, monkeypatc
             replay_fifo(["KEY_OK"] * 40)
     finally:
         closer.join(timeout=25)
+        # A thread that outlived the test would close its descriptor after
+        # pytest had recycled the number.
+        assert not closer.is_alive(), "the closing thread outlived the test"
     assert "went away while keys were being sent" in str(exc.value)
     assert utils.send_keys_skip_reason(str(exc.value)) is None, "this must not turn into a skip"
 
@@ -404,19 +414,21 @@ def test_missing_framebuffer_skips(past_the_binary_check, tmp_path: Path, monkey
     assert "no readable framebuffer" in str(exc.value)
 
 
-def test_empty_framebuffer_variable_falls_back_like_fbgrab(fbgrab, tmp_path: Path, monkeypatch) -> None:
+def test_empty_framebuffer_variable_falls_back_like_fbgrab(past_the_binary_check, tmp_path: Path, monkeypatch) -> None:
     # fbgrab resolves ${FRAMEBUFFER:-/dev/fb0}, so an empty value must name the
     # default device here as well instead of an empty path.
+    #
+    # Asserted on the device that gets looked at, not on the outcome. Sorting
+    # the three possible outcomes into pass and fail is what a host with a
+    # working framebuffer breaks: there the capture simply succeeds, which is
+    # correct and says nothing either way. This holds on every host.
     monkeypatch.setenv("FRAMEBUFFER", "")
-    try:
+    looked_at: list = []
+    real_access = os.access
+    monkeypatch.setattr(os, "access", lambda path, mode: looked_at.append(path) or real_access(path, mode))
+    with contextlib.suppress(pytest.skip.Exception, subprocess.CalledProcessError):
         utils.capture_framebuffer(tmp_path / "shot.png", delay=0)
-    except pytest.skip.Exception as exc:
-        assert "/dev/fb0" in str(exc)
-    except subprocess.CalledProcessError:
-        pass  # a real framebuffer exists and fbgrab ran - also fine
-    else:
-        # Returning normally would leave this test asserting nothing at all.
-        pytest.fail("capture_framebuffer() neither named /dev/fb0 nor reached fbgrab")
+    assert "/dev/fb0" in looked_at, looked_at
 
 
 def test_readable_framebuffer_reaches_fbgrab(fbgrab, tmp_path: Path, monkeypatch) -> None:
@@ -543,22 +555,51 @@ def an_outer_deadline(seconds: float, interval: float):
     """
     fired: list = []
     previous_handler = signal.getsignal(signal.SIGALRM)
-    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    outer_left, outer_interval = signal.getitimer(signal.ITIMER_REAL)
+    started = time.monotonic()
     signal.signal(signal.SIGALRM, lambda *_: fired.append(True))
     signal.setitimer(signal.ITIMER_REAL, seconds, interval)
     try:
         yield fired
     finally:
-        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+        signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
+        if outer_left:
+            # The remaining time, not the value captured on entry - putting the
+            # latter back would hand a real enclosing deadline more time than
+            # it had, which is the mistake this stub is here to help catch.
+            rest = outer_left - (time.monotonic() - started)
+            signal.setitimer(signal.ITIMER_REAL, max(rest, 1e-3), outer_interval)
+
+
+def test_the_guard_turns_a_blocking_call_into_a_failure(fifo: str) -> None:
+    # The guard's own behaviour, which nothing checked: three tests and drain()
+    # rely on it to turn a regression in the non-blocking open into a red test
+    # instead of a hung run, and with the guard reduced to a no-op the whole
+    # file still passed. A blocking open on a readerless FIFO is the real
+    # thing, not a stand-in.
+    #
+    # The rescue reader is why a broken guard fails this test rather than
+    # hanging the suite: it arrives late, unblocks the open, and pytest.raises
+    # then reports that no AssertionError came.
+    rescue = threading.Timer(3.0, lambda: os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)))
+    rescue.start()
+    try:
+        with pytest.raises(AssertionError, match="it blocked"):
+            with fails_instead_of_hanging(0.5):
+                os.close(os.open(fifo, os.O_WRONLY))
+    finally:
+        rescue.cancel()
+        rescue.join(timeout=5)
 
 
 def test_the_guard_hands_an_outer_deadline_back_intact() -> None:
-    # pytest-timeout arms ITIMER_REAL, which carries a fractional deadline and
-    # a repeat interval. alarm() can represent neither: it rounds up to whole
-    # seconds and has no interval at all. The interval is what makes this
-    # assertion independent of wall-clock timing - a busy machine changes how
-    # much of the deadline is left, but never whether the interval survived.
+    # ITIMER_REAL carries a fractional deadline and a repeat interval; alarm()
+    # can represent neither. The interval is what makes this assertion
+    # independent of wall-clock timing - a busy machine changes how much of the
+    # deadline is left, but never whether the interval survived. pytest-timeout
+    # itself sets no interval, so this half stands for any other owner of a
+    # process-wide timer, not for pytest-timeout.
     # The guard's own deadline has to be the shorter one, or it stands aside
     # and never touches the timer - which would make this assertion true
     # without any restoring code behind it.
@@ -579,15 +620,13 @@ def test_the_guard_lets_an_earlier_outer_deadline_win() -> None:
     with an_outer_deadline(0.2, 0) as fired:
         with fails_instead_of_hanging(30):
             time.sleep(0.5)
-            # Asserted here, not after the guard: on the way out the guard puts
-            # an outer deadline that has already run out back with a minimal
-            # delay, so it fires either way. Checking afterwards would pass
-            # against a guard that postponed it for the full 30 seconds - the
-            # very thing this test is about.
+            # Asserted inside the guard. A version that took the timer over
+            # and only restored it on the way out would also let this fire
+            # eventually, so checking afterwards would pass against exactly the
+            # behaviour this test exists to rule out.
             assert fired, "the outer deadline did not fire while the guard was active"
-    # And exactly once. Rearming an expiry that has already been delivered
-    # would dump the threads a second time, on the way out of the first dump,
-    # and bury the timeout that really happened.
+    # And exactly once: standing aside must not add a second delivery on the
+    # way out either.
     assert len(fired) == 1, f"the outer deadline was delivered {len(fired)} times"
 
 
