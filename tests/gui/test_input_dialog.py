@@ -500,3 +500,115 @@ def test_space_key_inserts_a_space(tmp_path: Path) -> None:
         # The one test that edits the value, so the one that meets the
         # discard box on the way out.
         _leave_edited_dialog()
+
+
+@pytest.mark.gui
+def test_green_key_deletes_one_character_backwards(tmp_path: Path) -> None:
+    """GREEN must remove the glyph before the cursor - one, and only one.
+
+    The regression this exists for: GREEN was bound to a forward delete
+    while the cursor starts past the last glyph (setText() ends with
+    ib_cursor = ib_glyphs.size()), so erase() returned false, nothing
+    repainted, and the key looked dead until a LEFT press had moved the
+    cursor back.
+
+    Two letters are typed and GREEN is pressed once. The result has to
+    land exactly on the one-letter picture, which separates the three
+    outcomes that matter: doing nothing leaves two letters, a clear-all
+    empties the field, and only a backspace lands in between. Asserting
+    "the screen changed" would pass for all but the first.
+    """
+    _require_gui()
+
+    shot_empty = tmp_path / "bs_field_empty.png"
+    shot_one = tmp_path / "bs_one_letter.png"
+    shot_two = tmp_path / "bs_two_letters.png"
+    shot_after = tmp_path / "bs_after_green.png"
+
+    space_crop, ticking, shot_key, _ = _open_verified(tmp_path)
+
+    def row_of(shot: Path) -> Path:
+        return utils.blank_region(shot, ticking, "notick")
+
+    try:
+        # Back onto the space key, the state shot_key was taken in - the
+        # dialog guard below compares against it. The focus stays on the
+        # keyboard throughout, which also keeps the field caret from
+        # blinking into the comparison.
+        _send("RIGHT")
+
+        # Where the text lands, measured rather than assumed: the full
+        # frame carries the clock and would let a dialog that closed
+        # itself pass hardest of all.
+        _send("YELLOW")
+        utils.capture_x11(shot_empty)
+        _send("A")
+        utils.capture_x11(shot_one)
+        _send("B")
+        utils.capture_x11(shot_two)
+
+        # Measured in two steps on purpose. An empty field renders its
+        # placeholder, so the empty->one diff spans the placeholder's
+        # whole width - a band derived from it would saturate at the
+        # screen edge and reach far outside the dialog, where anything
+        # that repaints on its own lands in the strict comparison
+        # below. Position and height come from that diff; the right
+        # edge comes from the one->two diff, which is the second glyph
+        # and nothing else.
+        text_x, text_y, _, text_h = utils.diff_bbox(
+            row_of(shot_empty), row_of(shot_one)
+        )
+        second_x, _, second_w, _ = utils.diff_bbox(
+            row_of(shot_one), row_of(shot_two)
+        )
+        screen_w, _ = utils.screenshot_size(shot_empty)
+        right = min(max(second_x + second_w, text_x + 1) + 4, screen_w)
+        text_row = (text_x, text_y, right - text_x, text_h)
+
+        # Guard, not decoration: if the second letter never arrived, the
+        # buffer holds one glyph and a working backspace would empty the
+        # field - the assert below would then read that as "GREEN cleared
+        # everything" and fail for the wrong reason.
+        typed = utils.images_differ(row_of(shot_one), row_of(shot_two), text_row)
+        assert typed > 0, (
+            "typing a second letter did not change the text row, so the "
+            "field never held two glyphs - nothing can be concluded about "
+            "what GREEN does to them"
+        )
+
+        _send("GREEN")
+        utils.capture_x11(shot_after)
+
+        # OK is bound to SAVE in the footer and GREEN could, if the
+        # dispatch broke, close the dialog instead of editing. The crop
+        # would then sit over the menu underneath and every text
+        # comparison below would measure the wrong screen.
+        drift = utils.images_differ(row_of(shot_key), row_of(shot_after), space_crop)
+        assert drift == 0, (
+            f"the selected space key changed by {drift} pixels after GREEN "
+            "- the dialog closed or the keyboard moved, so what the field "
+            "shows says nothing about the key"
+        )
+
+        # The regression itself: GREEN used to leave the field untouched.
+        assert utils.images_differ(row_of(shot_two), row_of(shot_after), text_row) > 0, (
+            "the text row is unchanged after GREEN - the key did nothing, "
+            "which is exactly how a forward delete behaves with the cursor "
+            "at the end of the buffer"
+        )
+
+        # One glyph removed, not the buffer emptied.
+        back = utils.images_differ(row_of(shot_one), row_of(shot_after), text_row)
+        assert back == 0, (
+            f"the text row differs from the one-letter picture by {back} "
+            "pixels after GREEN - the key removed something other than the "
+            "single glyph before the cursor"
+        )
+        assert utils.images_differ(row_of(shot_empty), row_of(shot_after), text_row) > 0, (
+            "the text row is back to the empty picture after one GREEN - "
+            "the key cleared the whole field instead of deleting one glyph, "
+            "which is what YELLOW is for"
+        )
+    finally:
+        # Edits the value, so it meets the discard box on the way out.
+        _leave_edited_dialog()
