@@ -2,8 +2,9 @@
 # selection must be visible and a layout round-trip pixel-stable (the
 # footer used to shift and leave button remnants), the space key must
 # be legible and actually insert, green must delete one glyph
-# backwards, and the caret must stand visibly - not blinking - while
-# the keyboard holds the keys.
+# backwards, the caret must stand visibly - not blinking - while the
+# keyboard holds the keys, and the placeholder must be visibly dimmer
+# than typed text without fading into the field.
 #
 # Navigation is position-independent on purpose. Menus reopen on the
 # entry that was selected when they last closed (CMenuGlobal keeps the
@@ -240,20 +241,21 @@ def _try_locate_space_key(
 
 def _measured_text_row(
     tmp_path: Path, ticking, prefix: str
-) -> tuple[tuple[int, int, int, int], Path, Path, Path]:
+) -> tuple[tuple[int, int, int, int], Path, Path, Path, tuple[int, int, int, int]]:
     """Clear the field, type two letters, and measure the text band.
 
-    Shared by the green-key and the caret test, which compare against
-    exactly these three states. The band is taken in two steps on
-    purpose: an empty field renders its placeholder, so the empty->one
-    diff spans the placeholder's whole width and is only good for
-    position and height - a width scaled from it would saturate at the
-    screen edge, where anything self-repainting lands in a strict
+    Shared by the green-key, caret and placeholder tests, which compare
+    against exactly these three states. The band is taken in two steps
+    on purpose: an empty field renders its placeholder, so the
+    empty->one diff spans the placeholder's whole width and is only good
+    for position and height - a width scaled from it would saturate at
+    the screen edge, where anything self-repainting lands in a strict
     comparison. The right edge comes from the one->two diff, which is
     the second glyph plus the caret's move, padded by a few pixels.
 
-    Returns the band and the empty/one-letter/two-letter shots, all
-    taken with keyboard focus.
+    Returns the band, the empty/one-letter/two-letter shots - all taken
+    with keyboard focus - and last that wider placeholder band, which is
+    where the hint's own pixels are and the narrow band is not.
     """
     shot_empty = tmp_path / f"{prefix}_empty.png"
     shot_one = tmp_path / f"{prefix}_one.png"
@@ -269,7 +271,7 @@ def _measured_text_row(
     _send("B")
     utils.capture_x11(shot_two)
 
-    text_x, text_y, _, text_h = utils.diff_bbox(
+    text_x, text_y, hint_w, text_h = utils.diff_bbox(
         row_of(shot_empty), row_of(shot_one)
     )
     second_x, _, second_w, _ = utils.diff_bbox(
@@ -277,7 +279,13 @@ def _measured_text_row(
     )
     screen_w, _ = utils.screenshot_size(shot_empty)
     right = min(max(second_x + second_w, text_x + 1) + 4, screen_w)
-    return (text_x, text_y, right - text_x, text_h), shot_empty, shot_one, shot_two
+    return (
+        (text_x, text_y, right - text_x, text_h),
+        shot_empty,
+        shot_one,
+        shot_two,
+        (text_x, text_y, hint_w, text_h),
+    )
 
 
 def _open_verified(tmp_path: Path):
@@ -587,7 +595,7 @@ def test_green_key_deletes_one_character_backwards(tmp_path: Path) -> None:
         # Where the text lands, measured rather than assumed: the full
         # frame carries the clock and would let a dialog that closed
         # itself pass hardest of all.
-        text_row, shot_empty, shot_one, shot_two = _measured_text_row(
+        text_row, shot_empty, shot_one, shot_two, _ = _measured_text_row(
             tmp_path, ticking, "bs"
         )
 
@@ -683,7 +691,7 @@ def test_caret_stays_visible_on_keyboard_focus(tmp_path: Path) -> None:
         return utils.blank_region(shot, ticking, "notick")
 
     try:
-        text_row, _, _, shot_two = _measured_text_row(tmp_path, ticking, "cv")
+        text_row, _, _, shot_two, _ = _measured_text_row(tmp_path, ticking, "cv")
 
         # Static half of the decision: nothing in the text row may move
         # on its own while the keyboard holds the keys. The samples
@@ -757,6 +765,152 @@ def test_caret_stays_visible_on_keyboard_focus(tmp_path: Path) -> None:
             "the text row is identical with the cursor at the end and "
             "one glyph to the left - no visible caret moved, which is "
             "exactly the hidden-cursor state this test exists to catch"
+        )
+    finally:
+        # Edits the value, so it meets the discard box on the way out.
+        _leave_edited_dialog()
+
+
+@pytest.mark.gui
+def test_placeholder_is_dimmer_than_typed_text(tmp_path: Path) -> None:
+    """The placeholder must read as a hint, not as content.
+
+    It used to be COL_MENUCONTENTDARK_TEXT_PLUS_2 against typed text in
+    _PLUS_1 - two neighbouring slots that setPalette() derives from one
+    base with fixed offsets, so they sit at most 8 of 255 brightness
+    steps apart in any theme. On screen that is the same colour, and a
+    hint saying "type your proxy host here" looked like a host name
+    somebody had already entered.
+
+    Measured in two bands of the same row, both shot with the keyboard
+    holding the keys: the narrow AB band carries only typed glyphs and
+    the caret, which paints in the text colour too and therefore cannot
+    skew this; the remainder to its right carries only placeholder,
+    because on an empty field the caret sits at the far left.
+
+    Judged by distance from the FIELD BODY, not by which of the two is
+    darker. "Subdued" means standing out less than the content does,
+    and on a light theme that makes the hint the brighter colour -
+    Crema paints black text and a mid-grey hint on a pale body. A
+    brightness comparison gets that exactly backwards, and it is blind
+    to Bluemoon, which separates the two by hue at equal brightness.
+    """
+    _require_gui()
+
+    # The hint may reach at most this share of the text's distance from
+    # the body. Measured on this build: text (243,238,223) stands 373
+    # off the body (0,18,46), the placeholder (121,116,106) stands 167 -
+    # a ratio of 0.45. The old neighbouring-slot pair scores 0.95.
+    # Computed over the seventeen shipped themes the worst legitimate
+    # ratio is DVB2000's 0.80, so 0.85 leaves them all room; Grey is the
+    # single theme this cannot pass, and it cannot because it defines
+    # inactive text as the normal text colour - see
+    # test_theme_colours.py, which states that separately.
+    MAX_HINT_RATIO = 0.85
+    # And a floor, so dimming the hint into the body cannot satisfy the
+    # ratio. 167 here; the tightest shipped theme is Crema at 57.
+    MIN_HINT_TO_BODY = 40
+
+    space_crop, ticking, _, shot_neighbor = _open_verified(tmp_path)
+
+    def row_of(shot: Path) -> Path:
+        return utils.blank_region(shot, ticking, "notick")
+
+    try:
+        text_row, shot_empty, shot_one, shot_two, hint_band = _measured_text_row(
+            tmp_path, ticking, "ph"
+        )
+
+        # Colours are read from the untouched shots, not from the
+        # clock-masked copies the comparisons use: blank_region() paints
+        # its band black, and black would win "furthest from the
+        # background" against any real ink. So the bands must not meet
+        # the clock in the first place - they do not, the clock is a
+        # screen-edge element and this row sits inside a centred dialog,
+        # but an untested assumption here would corrupt the measurement
+        # silently rather than loudly.
+        if ticking is not None:
+            row_top, row_bottom = text_row[1], text_row[1] + text_row[3]
+            tick_top, tick_bottom = ticking[1], ticking[1] + ticking[3]
+            if tick_top < row_bottom and row_top < tick_bottom:
+                pytest.fail(
+                    f"the clock band {ticking} overlaps the text row "
+                    f"{text_row}; colours read here would be the mask, "
+                    "not the dialog"
+                )
+
+        hint_x = text_row[0] + text_row[2]
+        hint_w = hint_band[0] + hint_band[2] - hint_x
+        if hint_w <= 0:
+            pytest.fail(
+                f"no placeholder is left of the band {hint_band} once the "
+                f"typed-text band {text_row} is cut off it - the hint is "
+                "shorter than two letters, or one of the two measurements "
+                "did not land where it should"
+            )
+        hint_row = (hint_x, hint_band[1], hint_w, hint_band[3])
+
+        # Harness guard, same one the green-key test uses: without it a
+        # lost keypress leaves the field empty, both bands then hold
+        # placeholder, and comparing a colour with itself would sail
+        # through every threshold below.
+        typed = utils.images_differ(row_of(shot_one), row_of(shot_two), text_row)
+        if typed <= 0:
+            pytest.fail(
+                "the text band did not change between one and two "
+                "letters - the second keypress never arrived, so the "
+                "band that should hold typed text may hold anything"
+            )
+
+        # Two different measurements on purpose. The typed text is the
+        # loudest thing in its band, so "furthest from the dominant
+        # colour" finds it. The placeholder is meant to be quiet, and
+        # the field body is not opaque - the boot screen shows through
+        # it in patches brighter than a subdued hint - so there it is
+        # taken as what the empty field ADDS over the one-letter shot,
+        # which the show-through cannot fake because it is in both.
+        text_ink, _ = utils.ink_and_background(shot_two, text_row)
+        hint_ink, hint_body = utils.ink_added(shot_one, shot_empty, hint_row)
+        assert text_ink is not None, (
+            f"no ink found in the typed-text band {text_row} although "
+            "two letters were sent - the field is not showing them"
+        )
+        assert hint_ink is not None, (
+            f"the empty field added no colour to the placeholder band "
+            f"{hint_row} over the one-letter shot - it rendered no hint, "
+            "so there is nothing here to judge a colour by"
+        )
+
+        text_gap = utils.color_distance(text_ink, hint_body)
+        hint_gap = utils.color_distance(hint_ink, hint_body)
+        ratio = hint_gap / text_gap if text_gap else 1.0
+
+        # The regression itself: a hint that stands out as far as the
+        # content does is not a hint.
+        assert ratio <= MAX_HINT_RATIO, (
+            f"the placeholder {hint_ink} stands {hint_gap:.0f} off the "
+            f"field body {hint_body} where the typed text {text_ink} "
+            f"stands {text_gap:.0f} - a ratio of {ratio:.2f}, past the "
+            f"{MAX_HINT_RATIO} this asks for. The hint reads as content"
+        )
+
+        # And the other direction: dimming it into the body would
+        # satisfy that ratio perfectly.
+        assert hint_gap >= MIN_HINT_TO_BODY, (
+            f"the placeholder {hint_ink} stands only {hint_gap:.0f} off "
+            f"the field body {hint_body} - dimmed past being readable"
+        )
+
+        # Same guard the neighbouring tests use: without it a dialog
+        # that closed itself would hand back a screen whose colours
+        # answer some other question entirely.
+        drift = utils.images_differ(
+            row_of(shot_neighbor), row_of(shot_two), space_crop
+        )
+        assert drift == 0, (
+            f"the space key face changed by {drift} pixels - the dialog "
+            "closed or the keyboard moved, so the bands above were not "
+            "measured on the input field"
         )
     finally:
         # Edits the value, so it meets the discard box on the way out.

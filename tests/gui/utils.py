@@ -1,6 +1,8 @@
 # Utilities for GUI smoke tests (headless Neutrino).
 
+import math
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -195,16 +197,10 @@ def diff_bbox(first: Path, second: Path) -> tuple[int, int, int, int]:
     return x, y, w, h
 
 
-def non_background_pixels(image: Path, crop: tuple[int, int, int, int]) -> int:
-    """Pixels in the crop that differ from the crop's dominant color.
-
-    A key face that shows anything - a glyph or an icon - has plenty of
-    them; a blank key is close to uniform and yields almost none.
-
-    Pass an interior crop: key gaps, rounded corners and the surrounding
-    background are not the key's dominant color either, so a crop that
-    still contains them scores a three-digit count on a blank key and the
-    measurement says nothing.
+def _histogram(
+    image: Path, crop: tuple[int, int, int, int]
+) -> list[tuple[int, tuple[int, int, int]]]:
+    """Colours of a crop as (count, rgb), most frequent first.
 
     Fails rather than skips when convert is installed but unusable, for
     the reason given in diff_bbox().
@@ -218,17 +214,153 @@ def non_background_pixels(image: Path, crop: tuple[int, int, int, int]) -> int:
          "-format", "%c", "histogram:info:"],
         capture_output=True,
     )
-    counts = []
+    entries: list[tuple[int, tuple[int, int, int]]] = []
     for line in (proc.stdout or b"").decode(errors="ignore").splitlines():
-        head = line.strip().split(":", 1)[0]
-        if head.isdigit():
-            counts.append(int(head))
-    if not counts:
+        text = line.strip()
+        head = text.split(":", 1)[0]
+        if not head.isdigit():
+            continue
+        hexcode = re.search(r"#([0-9A-Fa-f]+)", text)
+        if hexcode is None:
+            # A line whose colour cannot be read is not a colour this
+            # measurement may silently drop - it would change every
+            # ranking below it.
+            pytest.fail(f"unreadable histogram line for {image}: {text!r}")
+        raw = hexcode.group(1)
+        # ImageMagick prints six hex digits per pixel at 8 bits per
+        # channel and twelve at 16. Reading the first six of a 16-bit
+        # line would take R-high, R-low, G-high for RGB and quietly
+        # return a colour that is not on screen, so the width decides
+        # rather than being assumed.
+        if len(raw) == 6:
+            step = 2
+        elif len(raw) == 12:
+            step = 4
+        else:
+            pytest.fail(
+                f"histogram colour {raw!r} in {image} is neither 8 nor 16 "
+                "bits per channel - the parser cannot tell what it means"
+            )
+        rgb = tuple(
+            int(raw[i * step:i * step + 2], 16) for i in range(3)
+        )
+        entries.append((int(head), rgb))
+    if not entries:
         pytest.fail(
             f"convert produced no histogram for {image} crop {crop}: "
             f"{(proc.stderr or b'').decode(errors='ignore').strip()!r}"
         )
+    entries.sort(key=lambda e: e[0], reverse=True)
+    return entries
+
+
+def non_background_pixels(image: Path, crop: tuple[int, int, int, int]) -> int:
+    """Pixels in the crop that differ from the crop's dominant color.
+
+    A key face that shows anything - a glyph or an icon - has plenty of
+    them; a blank key is close to uniform and yields almost none.
+
+    Pass an interior crop: key gaps, rounded corners and the surrounding
+    background are not the key's dominant color either, so a crop that
+    still contains them scores a three-digit count on a blank key and the
+    measurement says nothing.
+    """
+    counts = [count for count, _ in _histogram(image, crop)]
     return sum(counts) - max(counts)
+
+
+def color_distance(first: tuple[int, int, int], second: tuple[int, int, int]) -> float:
+    """How far apart two colours are, as a plain euclidean RGB distance.
+
+    Preferred over comparing brightness() alone whenever the question is
+    "does this stand out against that": two colours can share a
+    brightness and still be plainly different - Bluemoon paints inactive
+    text orange at the same maximum channel as its white text - and on a
+    light theme the subdued colour is the BRIGHTER one, which a
+    brightness difference gets backwards.
+    """
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(first, second)))
+
+
+def brightness(color: tuple[int, int, int]) -> int:
+    """Neutrino's own brightness measure for a colour.
+
+    getBrightnessRGB() in color.cpp takes the largest of the three
+    channels, and that value is what the palette generator writes into
+    HSV's V. Comparing two OSD colours the way the OSD itself does keeps
+    a test's numbers comparable to the ones in the palette code.
+    """
+    return max(color)
+
+
+def ink_and_background(
+    image: Path, crop: tuple[int, int, int, int], min_pixels: int = 8
+) -> tuple[tuple[int, int, int] | None, tuple[int, int, int]]:
+    """The crop's background colour and the ink painted on it.
+
+    Background is the most frequent colour - sound for a band that is
+    mostly empty surface. The ink is NOT simply the second most frequent
+    one: RenderString() blends every glyph coverage level against the
+    background, so which shade occurs most often depends on the glyph
+    raster, not on what the eye reads as the letter. Taken instead is the
+    colour that sits furthest from the background in brightness and still
+    covers at least min_pixels - the fully covered core of the glyphs,
+    whether the text is lighter or darker than what it sits on.
+
+    min_pixels drops the stray blend shades that exist a handful of
+    pixels at a time. Ink is None when nothing on the band clears it,
+    which is a measurement result - an empty field - and left to the
+    caller to judge.
+    """
+    entries = _histogram(image, crop)
+    background = entries[0][1]
+    base = brightness(background)
+    candidates = [rgb for count, rgb in entries[1:] if count >= min_pixels]
+    if not candidates:
+        return None, background
+    return max(candidates, key=lambda rgb: abs(brightness(rgb) - base)), background
+
+
+def ink_added(
+    before: Path,
+    after: Path,
+    crop: tuple[int, int, int, int],
+    min_pixels: int = 64,
+) -> tuple[tuple[int, int, int] | None, tuple[int, int, int]]:
+    """The colour `after` paints into the crop and `before` does not.
+
+    Use this instead of ink_and_background() wherever the ink is meant
+    to be subdued. Neutrino's dialogs are not opaque - the input field
+    body carries an alpha, so the boot screen behind it shows through as
+    patches several hundred pixels large. "Furthest from the dominant
+    colour" then finds a patch rather than the glyphs as soon as the
+    text is dimmer than the show-through, which is exactly the case a
+    faded placeholder is about. Whatever shows through, though, shows
+    through in BOTH shots: taking the colour whose pixel count grows is
+    blind to it.
+
+    Returns that colour and the crop's dominant colour in `before`,
+    which is the surface the ink was painted onto. Ink is None when
+    nothing was added - a measurement result, left to the caller.
+    """
+    before_hist = _histogram(before, crop)
+    was = {rgb: count for count, rgb in before_hist}
+    background = before_hist[0][1]
+    # Judged on how many pixels a colour GAINED, not on a ratio: a
+    # ratio treats a shade that already covered a few hundred pixels
+    # the same as one that covered none, and the gain is what the new
+    # ink actually is.
+    added = [
+        (count - was.get(rgb, 0), rgb)
+        for count, rgb in _histogram(after, crop)
+        if count - was.get(rgb, 0) >= min_pixels
+    ]
+    if not added:
+        return None, background
+    # The biggest gain, not the most extreme colour: a glyph's fully
+    # covered core outnumbers each of the blend steps around its edges
+    # by an order of magnitude.
+    return max(added, key=lambda e: e[0])[1], background
 
 
 def image_size(image: Path) -> tuple[int, int] | None:
