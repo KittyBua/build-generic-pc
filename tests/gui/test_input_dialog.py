@@ -3,8 +3,10 @@
 # footer used to shift and leave button remnants), the space key must
 # be legible and actually insert, green must delete one glyph
 # backwards, the caret must stand visibly - not blinking - while the
-# keyboard holds the keys, and the placeholder must be visibly dimmer
-# than typed text without fading into the field.
+# keyboard holds the keys, the placeholder must be visibly dimmer
+# than typed text without fading into the field, the MENU button must
+# name the key grid it switches to, and a layout chosen by hand must
+# still be active when the next dialog opens.
 #
 # Navigation is position-independent on purpose. Menus reopen on the
 # entry that was selected when they last closed (CMenuGlobal keeps the
@@ -370,6 +372,116 @@ def test_keyboard_selection_and_layout_roundtrip(tmp_path: Path) -> None:
             f"layout round-trip left {stray} differing pixels - "
             "footer rebuild shifted or left remnants"
         )
+    finally:
+        _leave_dialog()
+
+
+def _visible_layout_token(
+    tmp_path: Path, space_crop: tuple[int, int, int, int], tag: str
+) -> str:
+    """The layout name the footer shows right now: QWERTZ or QWERTY.
+
+    Read from the strip below the space key only - the key grid above
+    it spells q w e r t z across its own cells, and whole-screen OCR
+    happily glues that into the very token this helper looks for. The
+    strip holds the footer buttons plus whatever lies below the dialog,
+    where stray clock digits cannot imitate a layout name.
+
+    Matched on WERTZ/WERTY without the leading Q: the capital Q is the
+    letter OCR most likes to misread (as O or 0), while the differing
+    tail letter is what actually tells the two layouts apart. Reading
+    both or neither token is failed loudly instead of guessed at.
+    """
+    shot = tmp_path / f"footer_{tag}.png"
+    utils.capture_x11(shot)
+    x, y, w, h = space_crop
+    screen_w, screen_h = utils.screenshot_size(shot)
+    top = min(screen_h - 2, y + h + 8)
+    strip = utils.crop_region(
+        shot, (0, top, screen_w, screen_h - top), "footer", scale=3
+    )
+    text = utils.ocr_image(strip).upper()
+    has_z = "WERTZ" in text
+    has_y = "WERTY" in text
+    if has_z == has_y:
+        pytest.fail(
+            f"footer OCR could not tell the layout apart ({tag}): "
+            f"both={has_z} in {text!r}"
+        )
+    return "QWERTZ" if has_z else "QWERTY"
+
+
+@pytest.mark.gui
+def test_layout_switch_names_the_layout(tmp_path: Path) -> None:
+    """The MENU footer button must name the key grid it switches to.
+
+    The button used to carry the language names Deutsch/English while
+    the visible effect of pressing it was a different key grid - a
+    label-versus-effect gap. The round-trip test above cannot see this:
+    a relabelled button comes back pixel-identical and passes. So the
+    label itself is read here, before and after one switch, and has to
+    change between the two layout names.
+    """
+    _require_gui()
+
+    space_crop, _ticking, _sel, _nb = _open_verified(tmp_path)
+    try:
+        first = _visible_layout_token(tmp_path, space_crop, "before")
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
+        second = _visible_layout_token(tmp_path, space_crop, "after")
+        assert second != first, (
+            f"the footer still names {first!r} after a layout switch - "
+            "the label does not follow the visible key grid"
+        )
+        # Back to the layout the run found, so later tests start from
+        # the state they expect.
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
+    finally:
+        _leave_dialog()
+
+
+@pytest.mark.gui
+def test_layout_choice_survives_reopen(tmp_path: Path) -> None:
+    """A layout switched by hand must greet the user in the next dialog.
+
+    The layout state used to live in the widget instance: MENU switched
+    the grid, closing the dialog threw the choice away, and the next
+    dialog started over at the OSD language. The choice is pinned in
+    g_settings.keyboard_layout now, so this test switches, leaves,
+    reopens - and expects the switched layout, not the language default.
+
+    Side effect worth knowing: the pin means a suite run may rewrite
+    keyboard_layout in neutrino.conf on shutdown, so an unchanged config
+    file is no longer proof that a run left everything alone. The test
+    switches back before leaving to keep the effective layout as found.
+    """
+    _require_gui()
+
+    space_crop, _ticking, _sel, _nb = _open_verified(tmp_path)
+    try:
+        first = _visible_layout_token(tmp_path, space_crop, "initial")
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
+        switched = _visible_layout_token(tmp_path, space_crop, "switched")
+        assert switched != first, (
+            "the layout switch itself did not arrive - nothing to "
+            "measure persistence on"
+        )
+    finally:
+        _leave_dialog()
+
+    space_crop, _ticking, _sel, _nb = _open_verified(tmp_path)
+    try:
+        reopened = _visible_layout_token(tmp_path, space_crop, "reopened")
+        assert reopened == switched, (
+            f"reopened dialog shows {reopened!r} instead of the "
+            f"previously chosen {switched!r} - the layout choice did "
+            "not survive the dialog boundary"
+        )
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
     finally:
         _leave_dialog()
 

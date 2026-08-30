@@ -499,6 +499,32 @@ def blank_region(
     return out
 
 
+def crop_region(
+    image: Path, region: tuple[int, int, int, int], suffix: str,
+    scale: int = 1,
+) -> Path:
+    """Copy of the image reduced to the region, optionally scaled up -
+    OCR on a small screen font gains a lot from a 3x enlargement."""
+    require_binary("convert")
+    x, y, w, h = region
+    out = image.parent / f"{image.stem}_{suffix}.png"
+    # Removed first, and the exit status checked: the name is reused
+    # across retries, so a failed conversion would otherwise leave the
+    # previous run's picture in place and every measurement below would
+    # quietly run on stale pixels.
+    out.unlink(missing_ok=True)
+    cmd = ["convert", str(image), "-crop", f"{w}x{h}+{x}+{y}", "+repage"]
+    if scale > 1:
+        cmd += ["-resize", f"{scale * 100}%"]
+    proc = subprocess.run(cmd + [str(out)], capture_output=True)
+    if proc.returncode != 0 or not out.exists():
+        pytest.fail(
+            f"convert could not crop {region} from {image}: "
+            f"{(proc.stderr or b'').decode(errors='ignore').strip()!r}"
+        )
+    return out
+
+
 def inset(crop: tuple[int, int, int, int], by: int) -> tuple[int, int, int, int]:
     """Shrink a crop on all four sides, e.g. to drop a key's border,
     rounded corners and the gap to its neighbour."""
