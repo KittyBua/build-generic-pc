@@ -1,7 +1,9 @@
-# Regression test for the CCTextInputDialog keyboard scenario: the key
-# selection must be visible (moving it changes pixels) and a layout
-# round-trip must be pixel-stable (the footer used to shift and leave
-# button remnants behind).
+# Regression tests for the CCTextInputDialog keyboard scenario: the key
+# selection must be visible and a layout round-trip pixel-stable (the
+# footer used to shift and leave button remnants), the space key must
+# be legible and actually insert, green must delete one glyph
+# backwards, and the caret must stand visibly - not blinking - while
+# the keyboard holds the keys.
 #
 # Navigation is position-independent on purpose. Menus reopen on the
 # entry that was selected when they last closed (CMenuGlobal keeps the
@@ -130,9 +132,11 @@ def _clock_band(tmp_path: Path) -> tuple[int, int, int, int] | None:
 
     With the focus in the input field the caret blinks, and a probe would
     report the text row instead of the clock - which is fatal, because
-    the text row is what two of these tests compare. The caret stops when
-    the focus leaves the field, so from the keyboard the clock is the
-    only thing left that moves.
+    the text row is what two of these tests compare. When the focus
+    moves to the keyboard the caret stops blinking - it stays on screen
+    as a static mark since the unfocused-caret change, but a standing
+    mark does not tick - so from the keyboard the clock is the only
+    thing left that moves.
 
     ticking_band() refuses to hand out a band that reaches into the
     dialog, so a mistake here costs a failed comparison rather than a
@@ -232,6 +236,48 @@ def _try_locate_space_key(
     # resolution.
     space_crop = utils.inset((x + w // 2, y, w - w // 2, h), max(3, h // 7))
     return space_crop, ticking
+
+
+def _measured_text_row(
+    tmp_path: Path, ticking, prefix: str
+) -> tuple[tuple[int, int, int, int], Path, Path, Path]:
+    """Clear the field, type two letters, and measure the text band.
+
+    Shared by the green-key and the caret test, which compare against
+    exactly these three states. The band is taken in two steps on
+    purpose: an empty field renders its placeholder, so the empty->one
+    diff spans the placeholder's whole width and is only good for
+    position and height - a width scaled from it would saturate at the
+    screen edge, where anything self-repainting lands in a strict
+    comparison. The right edge comes from the one->two diff, which is
+    the second glyph plus the caret's move, padded by a few pixels.
+
+    Returns the band and the empty/one-letter/two-letter shots, all
+    taken with keyboard focus.
+    """
+    shot_empty = tmp_path / f"{prefix}_empty.png"
+    shot_one = tmp_path / f"{prefix}_one.png"
+    shot_two = tmp_path / f"{prefix}_two.png"
+
+    def row_of(shot: Path) -> Path:
+        return utils.blank_region(shot, ticking, "notick")
+
+    _send("YELLOW")
+    utils.capture_x11(shot_empty)
+    _send("A")
+    utils.capture_x11(shot_one)
+    _send("B")
+    utils.capture_x11(shot_two)
+
+    text_x, text_y, _, text_h = utils.diff_bbox(
+        row_of(shot_empty), row_of(shot_one)
+    )
+    second_x, _, second_w, _ = utils.diff_bbox(
+        row_of(shot_one), row_of(shot_two)
+    )
+    screen_w, _ = utils.screenshot_size(shot_empty)
+    right = min(max(second_x + second_w, text_x + 1) + 4, screen_w)
+    return (text_x, text_y, right - text_x, text_h), shot_empty, shot_one, shot_two
 
 
 def _open_verified(tmp_path: Path):
@@ -398,12 +444,16 @@ def test_space_key_is_legible(tmp_path: Path) -> None:
 def test_space_key_inserts_a_space(tmp_path: Path) -> None:
     """OK on the space key must still reach the input buffer.
 
-    Not asserted as "the screen changes after OK": the caret is only
-    painted while the field has focus, so a correctly inserted trailing
-    space leaves an identical frame. Instead the same two letters are
-    typed twice - once with the space key pressed in between, once
-    without - from an identical focus state, so the only possible
-    difference is the space itself.
+    Not asserted as "the screen changes after OK": that would prove
+    nothing specific. Since the unfocused-caret change the static mark
+    does move when a space is inserted, but a moved caret says a glyph
+    arrived, not which one. Instead the same two letters are typed
+    twice - once with the space key pressed in between, once without -
+    from an identical focus state, so the only difference between the
+    finished rows is the space itself (the caret sits further right in
+    the spaced row, which the layout comparison is allowed to see and
+    the ink comparison tolerates - the mark carries the same ink in
+    both).
 
     What this pins down is that the key inserted something that takes
     room without leaving ink. That it is exactly one U+0020 does not
@@ -520,9 +570,6 @@ def test_green_key_deletes_one_character_backwards(tmp_path: Path) -> None:
     """
     _require_gui()
 
-    shot_empty = tmp_path / "bs_field_empty.png"
-    shot_one = tmp_path / "bs_one_letter.png"
-    shot_two = tmp_path / "bs_two_letters.png"
     shot_after = tmp_path / "bs_after_green.png"
 
     space_crop, ticking, shot_key, _ = _open_verified(tmp_path)
@@ -540,30 +587,9 @@ def test_green_key_deletes_one_character_backwards(tmp_path: Path) -> None:
         # Where the text lands, measured rather than assumed: the full
         # frame carries the clock and would let a dialog that closed
         # itself pass hardest of all.
-        _send("YELLOW")
-        utils.capture_x11(shot_empty)
-        _send("A")
-        utils.capture_x11(shot_one)
-        _send("B")
-        utils.capture_x11(shot_two)
-
-        # Measured in two steps on purpose. An empty field renders its
-        # placeholder, so the empty->one diff spans the placeholder's
-        # whole width - a band derived from it would saturate at the
-        # screen edge and reach far outside the dialog, where anything
-        # that repaints on its own lands in the strict comparison
-        # below. Position and height come from that diff; the right
-        # edge comes from the one->two diff, which is the second glyph
-        # and nothing else.
-        text_x, text_y, _, text_h = utils.diff_bbox(
-            row_of(shot_empty), row_of(shot_one)
+        text_row, shot_empty, shot_one, shot_two = _measured_text_row(
+            tmp_path, ticking, "bs"
         )
-        second_x, _, second_w, _ = utils.diff_bbox(
-            row_of(shot_one), row_of(shot_two)
-        )
-        screen_w, _ = utils.screenshot_size(shot_empty)
-        right = min(max(second_x + second_w, text_x + 1) + 4, screen_w)
-        text_row = (text_x, text_y, right - text_x, text_h)
 
         # Guard, not decoration: if the second letter never arrived, the
         # buffer holds one glyph and a working backspace would empty the
@@ -608,6 +634,129 @@ def test_green_key_deletes_one_character_backwards(tmp_path: Path) -> None:
             "the text row is back to the empty picture after one GREEN - "
             "the key cleared the whole field instead of deleting one glyph, "
             "which is what YELLOW is for"
+        )
+    finally:
+        # Edits the value, so it meets the discard box on the way out.
+        _leave_edited_dialog()
+
+
+@pytest.mark.gui
+def test_caret_stays_visible_on_keyboard_focus(tmp_path: Path) -> None:
+    """The caret must stand still and stay in sight on keyboard focus.
+
+    The regression this exists for: the caret was only painted with
+    field focus, so stepping down to the keyboard hid it while the
+    cursor position kept acting - green deleted and glyphs landed at a
+    place nothing marked.
+
+    The decision has two halves and both are asserted. Visible: two
+    letters are typed, the cursor is walked one glyph left through the
+    field, focus returns to the keyboard, and the text row must differ
+    between the two keyboard-focused shots - same text, moved mark.
+    Static: three extra captures spanning well over one blink period
+    must be pixel-identical in the text row - a caret that still
+    blinked would flip somewhere inside that window, and a moved-mark
+    assert alone would wave a blinking caret through on phase luck.
+
+    Focus is proven, not assumed, in both directions. A shot after the
+    climb must differ from the typed row (the field's focus repaint is
+    visible), or the climb lost a key and the failure is the harness's,
+    not the product's. A probe LEFT after the return must leave the
+    text row untouched (the keyboard consumes it), or the final DOWN
+    was lost and shot_mid shows the field's focus repaint - which would
+    otherwise pass the moved-mark assert with the feature removed.
+
+    Four separately settled UPs, not one: _open_verified() leaves the
+    keyboard selection on the bottom grid row, and only UP on the top
+    row hands the focus to the field (OnLeaveTop). One batch would
+    outrun the repaint and get swallowed.
+    """
+    _require_gui()
+
+    shot_mid = tmp_path / "cv_mid.png"
+    shot_field = tmp_path / "cv_field.png"
+    shot_probe = tmp_path / "cv_probe.png"
+
+    space_crop, ticking, _, shot_neighbor = _open_verified(tmp_path)
+
+    def row_of(shot: Path) -> Path:
+        return utils.blank_region(shot, ticking, "notick")
+
+    try:
+        text_row, _, _, shot_two = _measured_text_row(tmp_path, ticking, "cv")
+
+        # Static half of the decision: nothing in the text row may move
+        # on its own while the keyboard holds the keys. The samples
+        # span >1.5s, three full blink periods - a timer-driven caret
+        # cannot hold one phase that long.
+        for sample in range(3):
+            still = tmp_path / f"cv_still_{sample}.png"
+            utils.capture_x11(still)
+            ticks = utils.images_differ(row_of(shot_two), row_of(still), text_row)
+            assert ticks == 0, (
+                f"the text row changed by {ticks} pixels with no key sent "
+                "- the unfocused caret is blinking, the static half of "
+                "the requirement is broken"
+            )
+
+        # Bottom row -> top row -> field, one settled key each.
+        _send("UP")
+        _send("UP")
+        _send("UP")
+        _send("UP")
+        utils.capture_x11(shot_field)
+
+        # Harness guard, so a lost UP reads as a lost UP: with field
+        # focus the field repaints - thicker frame, focus body colour,
+        # blinking caret - so the row must differ from the typed state.
+        arrived = utils.images_differ(row_of(shot_two), row_of(shot_field), text_row)
+        if arrived == 0:
+            pytest.fail(
+                "the field shows no focus repaint after four UPs - a key "
+                "went out over a repaint and the climb never reached the "
+                "field; harness failure, not a caret defect"
+            )
+
+        _send("LEFT")
+        _send("DOWN")
+        utils.capture_x11(shot_mid)
+
+        # Product guard in the other direction: prove shot_mid really
+        # was taken with keyboard focus. A keyboard-consumed LEFT moves
+        # the key selection, which sits below the text row; with field
+        # focus it would move the cursor and change the row - and the
+        # moved-mark assert below would then measure the focus repaint
+        # instead of the caret and pass with the feature removed.
+        _send("LEFT")
+        utils.capture_x11(shot_probe)
+        leaked = utils.images_differ(row_of(shot_mid), row_of(shot_probe), text_row)
+        assert leaked == 0, (
+            f"LEFT changed the text row by {leaked} pixels after the "
+            "return to the keyboard - the final DOWN was lost and "
+            "shot_mid shows the focused field, so nothing below would "
+            "measure the caret"
+        )
+
+        # Guard, against the UNSELECTED reference: after the climb the
+        # keyboard selection sits on the top row, so the space key is
+        # unselected - exactly the state shot_neighbor recorded. A
+        # comparison against the selected shot would differ for a
+        # legitimate reason and cry wolf.
+        drift = utils.images_differ(
+            row_of(shot_neighbor), row_of(shot_mid), space_crop
+        )
+        assert drift == 0, (
+            f"the space key face changed by {drift} pixels - the dialog "
+            "closed or the keyboard moved, so the field says nothing "
+            "about the caret"
+        )
+
+        # The regression itself: same text, moved caret.
+        moved = utils.images_differ(row_of(shot_two), row_of(shot_mid), text_row)
+        assert moved > 0, (
+            "the text row is identical with the cursor at the end and "
+            "one glyph to the left - no visible caret moved, which is "
+            "exactly the hidden-cursor state this test exists to catch"
         )
     finally:
         # Edits the value, so it meets the discard box on the way out.
