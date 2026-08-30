@@ -877,6 +877,32 @@ def test_placeholder_is_dimmer_than_typed_text(tmp_path: Path) -> None:
         _send("C", "D", "E", "F", "G", "H")
         utils.capture_x11(shot_long)
 
+        # Both directions of that step, because the measurement below
+        # rests on it. Something must have changed in the band - if all
+        # six keys went missing the caret would still be sitting in it,
+        # and the reading would quietly degenerate into the one a
+        # mutated build proved wrong. But not too much: the field holds
+        # a 37-character placeholder, so eight letters cannot make
+        # ensureCursorVisible() scroll the viewport, and if that ever
+        # changed, every glyph would shift and the band would be
+        # repainted wholesale rather than losing a caret's worth of
+        # pixels.
+        moved = utils.images_differ(row_of(shot_two), row_of(shot_long), text_row)
+        band_area = text_row[2] * text_row[3]
+        if moved <= 0:
+            pytest.fail(
+                "the text band is unchanged after six more letters - none "
+                "of them arrived, so the caret still stands in the band "
+                "that is about to be read as typed text"
+            )
+        if moved > band_area // 2:
+            pytest.fail(
+                f"{moved} of {band_area} pixels in the text band changed "
+                "after six more letters - that is a repaint of the whole "
+                "band, not a caret leaving it; the viewport has scrolled "
+                "and the band no longer holds the first two glyphs"
+            )
+
         # Two different measurements on purpose. In the AB band the
         # typed text is now the only thing painted, so "furthest from
         # the dominant colour" finds it. The placeholder is meant to be
@@ -905,13 +931,24 @@ def test_placeholder_is_dimmer_than_typed_text(tmp_path: Path) -> None:
         # glyphs in it still yields a colour - the boot screen through
         # the body, some 30 off it - and a ratio computed against that
         # would report "the hint reads as content" for a field that is
-        # not drawing text at all.
+        # not drawing text at all. Two different defects, and the
+        # message names both rather than guessing which one it is.
+        #
+        # A show-through patch cannot climb high enough to be taken for
+        # text and still satisfy the ratio: the body is 88% opaque, so
+        # whatever is behind the dialog contributes at most 12% of its
+        # own distance - some 53 units at the theoretical extreme, and
+        # 31 measured - while the ratio would need the band to reach
+        # about 196. The guards above keep the dialog and the band
+        # itself honest; this one keeps the reading honest.
         if text_gap < MIN_HINT_TO_BODY:
             pytest.fail(
                 f"the typed-text band {text_row} holds nothing that "
                 f"stands off the field body {hint_body}: its strongest "
                 f"colour {text_ink} is only {text_gap:.0f} away. Eight "
-                "letters were sent, so the field is not rendering glyphs"
+                "letters were sent, so either the field is not rendering "
+                "glyphs at all, or it renders them in a colour that has "
+                "sunk into the body"
             )
 
         # The regression itself: a hint that stands out as far as the
@@ -934,7 +971,7 @@ def test_placeholder_is_dimmer_than_typed_text(tmp_path: Path) -> None:
         # that closed itself would hand back a screen whose colours
         # answer some other question entirely.
         drift = utils.images_differ(
-            row_of(shot_neighbor), row_of(shot_two), space_crop
+            row_of(shot_neighbor), row_of(shot_long), space_crop
         )
         assert drift == 0, (
             f"the space key face changed by {drift} pixels - the dialog "
