@@ -783,10 +783,19 @@ def test_placeholder_is_dimmer_than_typed_text(tmp_path: Path) -> None:
     somebody had already entered.
 
     Measured in two bands of the same row, both shot with the keyboard
-    holding the keys: the narrow AB band carries only typed glyphs and
-    the caret, which paints in the text colour too and therefore cannot
-    skew this; the remainder to its right carries only placeholder,
-    because on an empty field the caret sits at the far left.
+    holding the keys. The remainder right of the AB band carries only
+    placeholder, because an empty field parks the caret at the far
+    left. The AB band carries the typed text - but read from a later
+    shot, after six more letters have pushed the caret out of it.
+
+    That detour is not decoration. The caret paints in the text colour,
+    so inside a band that still holds it no colour reading can tell a
+    glyph from a caret: a field that had stopped drawing glyphs
+    entirely would hand back a perfectly good text colour, taken from
+    the caret, and this test would pass. Measured on a build mutated to
+    do exactly that. Counting pixels does not separate them either -
+    the caret's anti-aliased edge changes shade as it moves. Moving the
+    caret out of the band does.
 
     Judged by distance from the FIELD BODY, not by which of the two is
     darker. "Subdued" means standing out less than the content does,
@@ -862,18 +871,25 @@ def test_placeholder_is_dimmer_than_typed_text(tmp_path: Path) -> None:
                 "band that should hold typed text may hold anything"
             )
 
-        # Two different measurements on purpose. The typed text is the
-        # loudest thing in its band, so "furthest from the dominant
-        # colour" finds it. The placeholder is meant to be quiet, and
-        # the field body is not opaque - the boot screen shows through
-        # it in patches brighter than a subdued hint - so there it is
-        # taken as what the empty field ADDS over the one-letter shot,
-        # which the show-through cannot fake because it is in both.
-        text_ink, _ = utils.ink_and_background(shot_two, text_row)
+        # Six more letters, so the caret leaves the AB band and what is
+        # left in it is glyphs and nothing else.
+        shot_long = tmp_path / "ph_long.png"
+        _send("C", "D", "E", "F", "G", "H")
+        utils.capture_x11(shot_long)
+
+        # Two different measurements on purpose. In the AB band the
+        # typed text is now the only thing painted, so "furthest from
+        # the dominant colour" finds it. The placeholder is meant to be
+        # quiet, and the field body is not opaque - the boot screen
+        # shows through it in patches brighter than a subdued hint - so
+        # there it is taken as what the empty field ADDS over the
+        # one-letter shot, which the show-through cannot fake because
+        # it stands in both.
+        text_ink, _ = utils.ink_and_background(shot_long, text_row)
         hint_ink, hint_body = utils.ink_added(shot_one, shot_empty, hint_row)
         assert text_ink is not None, (
             f"no ink found in the typed-text band {text_row} although "
-            "two letters were sent - the field is not showing them"
+            "eight letters were sent - the field is not showing them"
         )
         assert hint_ink is not None, (
             f"the empty field added no colour to the placeholder band "
@@ -884,6 +900,19 @@ def test_placeholder_is_dimmer_than_typed_text(tmp_path: Path) -> None:
         text_gap = utils.color_distance(text_ink, hint_body)
         hint_gap = utils.color_distance(hint_ink, hint_body)
         ratio = hint_gap / text_gap if text_gap else 1.0
+
+        # Told apart from the ratio below on purpose: a band with no
+        # glyphs in it still yields a colour - the boot screen through
+        # the body, some 30 off it - and a ratio computed against that
+        # would report "the hint reads as content" for a field that is
+        # not drawing text at all.
+        if text_gap < MIN_HINT_TO_BODY:
+            pytest.fail(
+                f"the typed-text band {text_row} holds nothing that "
+                f"stands off the field body {hint_body}: its strongest "
+                f"colour {text_ink} is only {text_gap:.0f} away. Eight "
+                "letters were sent, so the field is not rendering glyphs"
+            )
 
         # The regression itself: a hint that stands out as far as the
         # content does is not a hint.

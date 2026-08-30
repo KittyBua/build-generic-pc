@@ -227,19 +227,20 @@ def _histogram(
             # ranking below it.
             pytest.fail(f"unreadable histogram line for {image}: {text!r}")
         raw = hexcode.group(1)
-        # ImageMagick prints six hex digits per pixel at 8 bits per
-        # channel and twelve at 16. Reading the first six of a 16-bit
-        # line would take R-high, R-low, G-high for RGB and quietly
-        # return a colour that is not on screen, so the width decides
-        # rather than being assumed.
-        if len(raw) == 6:
-            step = 2
-        elif len(raw) == 12:
-            step = 4
-        else:
+        # ImageMagick prints two hex digits per channel at 8 bits and
+        # four at 16, for three channels or four with an alpha one.
+        # Reading the first six digits of a 16-bit line would take
+        # R-high, R-low, G-high as RGB and quietly return a colour that
+        # is not on screen, so the width decides rather than being
+        # assumed. Alpha, where present, is dropped: nothing here asks
+        # about transparency, and the first three channels are the
+        # colour either way.
+        step = {6: 2, 8: 2, 12: 4, 16: 4}.get(len(raw))
+        if step is None:
             pytest.fail(
-                f"histogram colour {raw!r} in {image} is neither 8 nor 16 "
-                "bits per channel - the parser cannot tell what it means"
+                f"histogram colour {raw!r} in {image} is none of the "
+                "widths ImageMagick writes for 8- or 16-bit RGB(A) - the "
+                "parser cannot tell what it means"
             )
         rgb = tuple(
             int(raw[i * step:i * step + 2], 16) for i in range(3)
