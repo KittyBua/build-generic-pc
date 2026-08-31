@@ -26,6 +26,7 @@ from .neutrino_run import (
     NEUTRINO_DATA,
     ROOT_DIR,
     IsolatedNeutrino,
+    debug_logging_built_in,
     require_isolated_run,
 )
 
@@ -57,6 +58,12 @@ def _satellite_frontend_last() -> bool:
 def _require_misconfigurable_tuner() -> None:
     require_isolated_run()
     utils.require_binary("dvb-fe-tool")
+    utils.require_binary("xwininfo")
+    # "found N frontends" below is an INFO(), and INFO is an empty macro
+    # without -DDEBUG (src/zapit/debug.h). Asserting on it in a --without-debug
+    # build would fail red for a reason that has nothing to do with the change.
+    if not debug_logging_built_in():
+        pytest.skip("zapit INFO logging compiled out (--without-debug)")
     if not _satellite_frontend_last():
         pytest.skip("needs a tuner whose satellite frontend is not frontend 0")
 
@@ -135,7 +142,7 @@ def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) ->
         time.sleep(5)
 
         shot = tmp_path / "message.png"
-        utils.capture_x11(shot, window_fallback=True)
+        utils.capture_x11(shot, display=owned_display.display, windows=instance.windows())
         text = utils.ocr_image(shot)
 
         # The three things the message did not say before. Whole words only --
@@ -155,7 +162,7 @@ def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) ->
         time.sleep(4)
         assert instance.alive(), "Neutrino died on the tuner setup button"
 
-        utils.capture_x11(shot, window_fallback=True)
+        utils.capture_x11(shot, display=owned_display.display, windows=instance.windows())
         menu = utils.ocr_image(shot)
         assert "Independent" in menu or "Timeout" in menu, (
             f"the button did not open the tuner setup: {menu!r}"

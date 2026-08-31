@@ -8,6 +8,7 @@ they were written -- each one records a trap that cost a debugging round.
 
 import glob
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -104,6 +105,13 @@ def debug_logging_built_in() -> bool:
         return False
 
 
+def root_children(display: str) -> set:
+    """Window ids currently below the root window."""
+    listing = subprocess.run(["xwininfo", "-display", display, "-root", "-children"],
+                             capture_output=True, text=True)
+    return set(re.findall(r"^\s+(0x[0-9a-f]+)", listing.stdout, re.MULTILINE))
+
+
 class IsolatedNeutrino:
     """One throwaway Neutrino run against a config tree of the test's own.
 
@@ -122,6 +130,13 @@ class IsolatedNeutrino:
         env["DISPLAY"] = display
         env["SIMULATE_FE"] = simulate_fe
         env["NEUTRINO_EXIT_CODES"] = "posix"
+        # Everything below the root window before this run started. Neutrino
+        # sets neither a window name nor _NET_WM_PID, so "which window is
+        # Neutrino's" has no direct answer -- but "which windows appeared with
+        # it" does, and that is enough to keep a screenshot from being taken of
+        # somebody else's editor.
+        self.display = display
+        self._windows_before = root_children(display)
         # The bind mount lives and dies with this process's namespace, so a
         # crashed test cannot leave the developer tree shadowed.
         script = (
@@ -148,6 +163,10 @@ class IsolatedNeutrino:
                 return needle in self.log.read_text(errors="replace")
             time.sleep(0.5)
         return False
+
+    def windows(self) -> list:
+        """Windows that appeared since this run started -- Neutrino's own."""
+        return sorted(root_children(self.display) - self._windows_before)
 
     def alive(self) -> bool:
         return self.proc.poll() is None

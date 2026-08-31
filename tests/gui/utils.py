@@ -92,7 +92,7 @@ def capture_framebuffer(destination: Path, delay: float = 0.5) -> None:
 
 
 def capture_x11(destination: Path, delay: float = 0.5, display: str | None = None,
-                window_fallback: bool = False) -> None:
+                windows: list | None = None) -> None:
     """Capture the screen of a PC build, which renders into X rather than a
     framebuffer device.
 
@@ -106,7 +106,7 @@ def capture_x11(destination: Path, delay: float = 0.5, display: str | None = Non
         pytest.skip("DISPLAY not set - start Neutrino under Xvfb before running this test")
     time.sleep(delay)
 
-    if not window_fallback:
+    if windows is None:
         subprocess.run(["import", "-display", display, "-window", "root", str(destination)],
                        check=True)
         return
@@ -117,25 +117,20 @@ def capture_x11(destination: Path, delay: float = 0.5, display: str | None = Non
 
     # Grabbing the root window is right under Xvfb, but a desktop backed by
     # XWayland answers X_GetImage on it with BadMatch -- the root window is not
-    # readable there, while Neutrino's own top-level window still is.
+    # readable there, while an application's own top-level window still is.
     #
-    # Off by default, and it must stay that way: this picks the first window it
-    # can read, which is not necessarily Neutrino's. A test may only ask for it
-    # when its own assertions would fail on a foreign window -- never one that
-    # merely compares two pictures, because two shots of somebody else's window
-    # compare just fine and prove nothing.
-    require_binary("xwininfo")
-    listing = subprocess.run(["xwininfo", "-display", display, "-root", "-children"],
-                             capture_output=True, text=True)
-    for window, width, height in re.findall(r"^\s+(0x[0-9a-f]+).*?\s(\d+)x(\d+)\+",
-                                            listing.stdout, re.MULTILINE):
-        if int(width) < 640 or int(height) < 480:
-            continue
+    # `windows` must be the caller's own windows, never "whatever is on this
+    # display". A screenshot of a stranger's editor can satisfy assertions
+    # about text that also exists in the source tree, and then the test proves
+    # nothing while looking green. IsolatedNeutrino.windows() supplies the ids
+    # by diffing the root's children across the run's start.
+    for window in windows:
         if subprocess.run(["import", "-display", display, "-window", window, str(destination)],
                           capture_output=True).returncode == 0:
             return
 
-    pytest.skip("no window on this display could be captured (XWayland without a readable root?)")
+    pytest.skip("none of this run's own windows could be captured "
+                "(XWayland without a readable root?)")
 
 
 def images_differ(
