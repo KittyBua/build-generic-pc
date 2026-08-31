@@ -84,6 +84,11 @@ def _prepared_instance(
     the two keys under test differ. SIMULATE_FE=1 keeps the start on
     the normal path; the tunerless defect is not what is under test.
     """
+    # Both checked before copying: a fresh checkout has no config tree
+    # at all (make neutrino leaves the runtime tree incomplete), and
+    # copytree would raise an ERROR where the honest answer is a skip.
+    if not CONFIG_MOUNT.is_dir():
+        pytest.skip("no config tree in the runtime tree - run `make run` once first")
     config = workdir / "config"
     shutil.copytree(CONFIG_MOUNT, config, symlinks=True)
     conf = config / "neutrino.conf"

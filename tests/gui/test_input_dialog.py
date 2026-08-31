@@ -560,6 +560,179 @@ def test_layout_choice_survives_reopen(tmp_path: Path) -> None:
         _leave_dialog()
 
 
+def _footer_band_token(tmp_path: Path, band: tuple[float, float], tag: str) -> str:
+    """Layout token from a horizontal band given as screen-height
+    fractions. The walk-independent reader for dialogs this file did
+    not open through _open_verified(): a mis-stepped walk shows no
+    token in the band and fails loudly with the OCR text, instead of
+    measuring whatever screen the keys landed on."""
+    shot = tmp_path / f"band_{tag}.png"
+    utils.capture_x11(shot)
+    screen_w, screen_h = utils.screenshot_size(shot)
+    top = int(screen_h * band[0])
+    height = int(screen_h * (band[1] - band[0]))
+    strip = utils.crop_region(shot, (0, top, screen_w, height), tag, scale=3)
+    return utils.read_layout_token(strip, tag)
+
+
+# Every dialog this test reads - the two cc demo dialogs and the
+# legacy one - floats centered on the 1280x720 test display with its
+# footer row around 73-77% of the screen height (verified from
+# captured frames of all three). The band holds the footer row alone:
+# tesseract shreds a strip that still contains boxed key rows
+# (measured while calibrating the persistence tests).
+_CENTERED_FOOTER_BAND = (0.69, 0.79)
+_LEGACY_FOOTER_BAND = _CENTERED_FOOTER_BAND
+
+
+@pytest.mark.gui
+def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
+    """A layout pinned in one dialog must show in REUSED dialog objects.
+
+    The pin's constructor half is covered elsewhere; this walk proves
+    the dialog-entry half, which review found unguarded: without the
+    entry re-apply, a keyboard object that outlives one dialog run
+    keeps the layout of its previous run and the pin never reaches it.
+    Two long-lived objects exist in the test menu: the "(empty)"
+    keyboard dialog is a deliberately persistent heap object serving
+    every activation (the proxy-setup binding in miniature), and the
+    legacy "Text input" forwarder lives as long as the test menu stays
+    open - which is why this walk navigates with EXIT, never HOME,
+    until the very end.
+
+    Steps: prime both reused dialogs (they show the current layout A),
+    switch the pin to B in a THIRD, freshly built dialog, then reopen
+    both: each must greet with B. Finally the pin is switched back to A
+    from the legacy dialog, so the run leaves the layout as found.
+    """
+    _require_gui()
+
+    def open_from_menu(steps: int) -> None:
+        _send(*(["PAGEUP"] * 5))
+        _walk_down(steps)
+        _send("OK")
+        utils.wait_until_static(tmp_path)
+
+    def leave_dialog_only() -> None:
+        _send("EXIT")
+        utils.wait_until_static(tmp_path)
+
+    def probe_band(band: tuple[float, float], tag: str) -> str | None:
+        shot = tmp_path / f"band_{tag}.png"
+        utils.capture_x11(shot)
+        screen_w, screen_h = utils.screenshot_size(shot)
+        top = int(screen_h * band[0])
+        height = int(screen_h * (band[1] - band[0]))
+        strip = utils.crop_region(shot, (0, top, screen_w, height), tag, scale=3)
+        return utils.read_layout_token_or_none(strip)
+
+    # Ground state, main menu, test menu, primed legacy dialog - as one
+    # retried unit: the way in is fragile (a HOME on live TV opens the
+    # zap history, a key over a repaint lands underneath), and only a
+    # readable layout token proves the walk arrived. _open_verified()
+    # holds its walk to the same standard.
+    first = None
+    for _attempt in range(3):
+        _send("EXIT")
+        _send("HOME")
+        _send("HOME")
+        utils.wait_until_static(tmp_path)
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
+        open_from_menu(8)
+        open_from_menu(10)
+        first = probe_band(_LEGACY_FOOTER_BAND, "legacy_prime")
+        if first is not None:
+            break
+    else:
+        pytest.fail(
+            "the walk to the legacy 'Text input' dialog never produced "
+            "a layout token in three attempts - reordered test menu, "
+            "keys lost on the way in, or the legacy footer shows no "
+            "layout name anymore"
+        )
+
+    last_seen = first
+    try:
+        leave_dialog_only()
+
+        # Into the demo menu (5); prime the persistent (empty) dialog
+        # (21) so its object exists and carries A before the pin moves.
+        open_from_menu(5)
+        open_from_menu(21)
+        cc_prime = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "cc_prime")
+        assert cc_prime == first, (
+            f"the two primed dialogs disagree ({cc_prime!r} vs "
+            f"{first!r}) before anything was switched - the walk "
+            "cannot be trusted"
+        )
+        leave_dialog_only()
+
+        # Switch the pin in a THIRD dialog, freshly built per
+        # activation (20) - the reused objects must not have seen it.
+        open_from_menu(20)
+        before = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "switch_before")
+        assert before == first, (
+            f"the fresh dialog opened {before!r} instead of {first!r} "
+            "- the constructor path lost the pin before the switch"
+        )
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
+        switched = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "switch_after")
+        last_seen = switched
+        assert switched != first, (
+            "the pin switch itself did not arrive - nothing to "
+            "measure the re-apply on"
+        )
+        leave_dialog_only()
+
+        # The persistent cc dialog again: entry re-apply must show the
+        # pin set elsewhere - grid and footer label both, since the
+        # token is read from the rebuilt footer.
+        open_from_menu(21)
+        cc_reused = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "cc_reused")
+        assert cc_reused == switched, (
+            f"the reused cc dialog greets with {cc_reused!r} although "
+            f"{switched!r} was pinned elsewhere - the entry re-apply "
+            "is not working"
+        )
+        leave_dialog_only()
+        leave_dialog_only()  # and the demo menu, back to the test menu
+
+        # The legacy object again - alive since its prime because the
+        # test menu never closed.
+        open_from_menu(10)
+        legacy_reused = _footer_band_token(
+            tmp_path, _LEGACY_FOOTER_BAND, "legacy_reused")
+        assert legacy_reused == switched, (
+            f"the reused legacy dialog greets with {legacy_reused!r} "
+            f"although {switched!r} was pinned elsewhere - the legacy "
+            "entry re-apply is not working"
+        )
+
+        # Leave the layout as found: one MENU back to A, proven.
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
+        restored = _footer_band_token(tmp_path, _LEGACY_FOOTER_BAND, "restored")
+        last_seen = restored
+        assert restored == first, (
+            f"switching back landed on {restored!r} instead of "
+            f"{first!r} - two layouts should cycle in one step"
+        )
+        leave_dialog_only()
+    finally:
+        # Red or green: when the last read token says the layout is
+        # off, one MENU flips it back - after a failed assert the
+        # dialog that produced the token is still open. Then close
+        # everything; no dialog was edited, so HOME cannot hit a
+        # discard box.
+        if first is not None and last_seen is not None and last_seen != first:
+            _send("MENU")
+            utils.wait_until_static(tmp_path)
+        _send("HOME")
+        _send("HOME")
+
+
 @pytest.mark.gui
 def test_space_key_is_legible(tmp_path: Path) -> None:
     """The space key must show a visible face in both selection states.

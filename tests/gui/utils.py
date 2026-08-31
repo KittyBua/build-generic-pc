@@ -578,6 +578,23 @@ def installed_icon(name: str) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _layout_token_in(text: str) -> str | None:
+    has_z = "WERTZ" in text
+    has_y = "WERTY" in text
+    if has_z == has_y:
+        return None
+    return "QWERTZ" if has_z else "QWERTY"
+
+
+def read_layout_token_or_none(
+    strip: Path, case_sensitive: bool = False
+) -> str | None:
+    """read_layout_token() for probing: None instead of a loud fail,
+    for callers that retry a whole walk when no token shows up."""
+    text = ocr_image(strip)
+    return _layout_token_in(text if case_sensitive else text.upper())
+
+
 def read_layout_token(strip: Path, tag: str, case_sensitive: bool = False) -> str:
     """The keyboard layout name OCR finds in the image: QWERTZ or QWERTY.
 
@@ -596,14 +613,12 @@ def read_layout_token(strip: Path, tag: str, case_sensitive: bool = False) -> st
     text = ocr_image(strip)
     if not case_sensitive:
         text = text.upper()
-    has_z = "WERTZ" in text
-    has_y = "WERTY" in text
-    if has_z == has_y:
+    token = _layout_token_in(text)
+    if token is None:
         pytest.fail(
-            f"OCR could not tell the layout apart ({tag}): "
-            f"both={has_z} in {text!r}"
+            f"OCR could not tell the layout apart ({tag}): {text!r}"
         )
-    return "QWERTZ" if has_z else "QWERTY"
+    return token
 
 
 def ocr_image(path: Path) -> str:
