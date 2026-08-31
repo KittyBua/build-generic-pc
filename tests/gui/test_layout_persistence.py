@@ -30,13 +30,12 @@ from pathlib import Path
 import pytest
 
 from . import utils
-from .test_tunerless_start import (
+from .neutrino_run import (
     CONFIG_MOUNT,
+    IsolatedNeutrino,
     OwnedDisplay,
-    TunerlessNeutrino,
-    _require_isolated_run,
-    _settle,
-    owned_display,  # noqa: F401  (fixture, found by name in this module)
+    require_isolated_run,
+    settle,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -76,7 +75,7 @@ def _conf_value(conf: Path, key: str) -> str | None:
 
 def _prepared_instance(
     workdir: Path, display: str, language: str, keyboard_layout: str
-) -> TunerlessNeutrino:
+) -> IsolatedNeutrino:
     """A Neutrino run on a copied config tree with the two keys set.
 
     The full tree is copied so the instance starts like the developer's
@@ -96,10 +95,10 @@ def _prepared_instance(
         pytest.skip("no neutrino.conf in the runtime tree - run `make run` once first")
     _set_conf_value(conf, "language", language)
     _set_conf_value(conf, "keyboard_layout", keyboard_layout)
-    return TunerlessNeutrino(workdir, display, simulate_fe="1")
+    return IsolatedNeutrino(workdir, display, simulate_fe="1")
 
 
-def _wait_for_gui(instance: TunerlessNeutrino, display: str, shot: Path) -> None:
+def _wait_for_gui(instance: IsolatedNeutrino, display: str, shot: Path) -> None:
     """FIFO up is not GUI up: rcinput opens the pipe long before the
     boot zap, and keys sent into that gap are swallowed or land on live
     TV, where a menu walk's DOWNs zap channels instead (measured - the
@@ -115,7 +114,7 @@ def _wait_for_gui(instance: TunerlessNeutrino, display: str, shot: Path) -> None
         "the boot zap never showed up in the log - the GUI main loop "
         "did not come up"
     )
-    _settle(shot, display)
+    settle(shot, display)
 
 
 def _open_main_menu_proven(display: str, shot: Path, workdir: Path) -> None:
@@ -132,9 +131,9 @@ def _open_main_menu_proven(display: str, shot: Path, workdir: Path) -> None:
     for _attempt in range(3):
         _send("HOME")
         _send("HOME")
-        _settle(pre, display)
+        settle(pre, display)
         _send("MENU")
-        _settle(shot, display)
+        settle(shot, display)
         if utils.images_differ(pre, shot) > 50000:
             return
     pytest.fail("the main menu never opened - MENU swallowed three times")
@@ -155,12 +154,12 @@ def _open_legacy_text_input(display: str, shot: Path, workdir: Path) -> None:
     for start in range(0, 8, 5):
         _send(*(["DOWN"] * min(5, 8 - start)))
     _send("OK")
-    _settle(shot, display)
+    settle(shot, display)
     _send(*(["PAGEUP"] * 5))
     for start in range(0, 10, 5):
         _send(*(["DOWN"] * min(5, 10 - start)))
     _send("OK")
-    _settle(shot, display)
+    settle(shot, display)
 
 
 def _legacy_footer_token(shot: Path, display: str, tag: str) -> str:
@@ -176,7 +175,7 @@ def _legacy_footer_token(shot: Path, display: str, tag: str) -> str:
     footer strip does. Drifts the dialog's height, the token read
     fails loudly with the OCR text in the message rather than guessing.
     """
-    _settle(shot, display)
+    settle(shot, display)
     screen_w, screen_h = utils.screenshot_size(shot)
     top = int(screen_h * 0.69)
     height = int(screen_h * 0.10)
@@ -191,7 +190,7 @@ def _leave_legacy_dialog(display: str, shot: Path) -> None:
     _send("EXIT")
     _send("HOME")
     _send("HOME")
-    _settle(shot, display)
+    settle(shot, display)
 
 
 @pytest.mark.gui
@@ -207,7 +206,7 @@ def test_pinned_layout_survives_restart_and_is_saved(
     once. One MENU then exercises the legacy switch path, and the conf
     the instance writes on shutdown must carry the new pin.
     """
-    _require_isolated_run()
+    require_isolated_run()
     instance = _prepared_instance(
         tmp_path, owned_display.display, language="english",
         keyboard_layout="deutsch",
@@ -252,7 +251,7 @@ def test_stale_pin_falls_back_to_the_language(
     Falling back to the first table instead would show QWERTY here -
     which is exactly what a naive "unknown means index 0" would do.
     """
-    _require_isolated_run()
+    require_isolated_run()
     instance = _prepared_instance(
         tmp_path, owned_display.display, language="deutsch",
         keyboard_layout="nosuchlayout",
