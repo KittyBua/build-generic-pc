@@ -626,24 +626,44 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
         strip = utils.crop_region(shot, (0, top, screen_w, height), tag, scale=3)
         return utils.read_layout_token_or_none(strip)
 
-    # Ground state, main menu, test menu, primed legacy dialog - as one
-    # retried unit: the way in is fragile (a HOME on live TV opens the
-    # zap history, a key over a repaint lands underneath), and only a
-    # readable layout token proves the walk arrived. _open_verified()
-    # holds its walk to the same standard.
+    def open_main_menu_proven() -> bool:
+        """MENU with proof, not hope: on live TV both HOME and EXIT
+        toggle the zap-history list (measured pixel by pixel), so no
+        fixed key prefix reaches quiet TV from every start state - its
+        parity decides. Instead: try MENU, and only a massive screen
+        change proves the main menu opened; anything else gets one
+        closing HOME and another try. No blind DOWNs before the proof -
+        on the shared instance they would navigate the history list
+        and OK would zap the developer's channel away.
+        """
+        pre = tmp_path / "entry_pre.png"
+        post = tmp_path / "entry_post.png"
+        for _ in range(4):
+            utils.capture_x11(pre)
+            _send("MENU")
+            utils.wait_until_static(tmp_path)
+            utils.capture_x11(post)
+            if utils.images_differ(pre, post) > 50000:
+                return True
+            _send("HOME")
+            utils.wait_until_static(tmp_path)
+        return False
+
+    # Main menu, test menu, primed legacy dialog - as one retried unit:
+    # only a readable layout token proves the walk arrived.
+    # _open_verified() holds its walk to the same standard.
     first = None
     for _attempt in range(3):
-        _send("EXIT")
-        _send("HOME")
-        _send("HOME")
-        utils.wait_until_static(tmp_path)
-        _send("MENU")
-        utils.wait_until_static(tmp_path)
+        if not open_main_menu_proven():
+            continue
         open_from_menu(8)
         open_from_menu(10)
         first = probe_band(_LEGACY_FOOTER_BAND, "legacy_prime")
         if first is not None:
             break
+        _send("HOME")
+        _send("HOME")
+        utils.wait_until_static(tmp_path)
     else:
         pytest.fail(
             "the walk to the legacy 'Text input' dialog never produced "
@@ -652,6 +672,33 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
             "layout name anymore"
         )
 
+    def assert_empty_dialog(tag: str) -> None:
+        """Prove the walk landed on the "(leer)" dialog, not its
+        neighbour: entries 20 and 21 are adjacent keyboard dialogs, and
+        a single lost DOWN opens the fresh one - whose constructor
+        shows the correct pin too, so the token alone cannot tell a
+        vacuous run from a real one. The title row can: "(leer)"
+        against "eingeben". The band must stay above the hint text,
+        which spells "leerem" in the neighbour dialog.
+        """
+        shot = tmp_path / f"title_{tag}.png"
+        utils.capture_x11(shot)
+        screen_w, screen_h = utils.screenshot_size(shot)
+        strip = utils.crop_region(
+            shot, (0, int(screen_h * 0.19), screen_w, int(screen_h * 0.08)),
+            tag, scale=3)
+        title = utils.ocr_image(strip).upper()
+        assert "LEER" in title and "EINGEBEN" not in title, (
+            f"not the persistent '(leer)' dialog ({tag}): title OCR "
+            f"reads {title!r} - a lost step opened the fresh neighbour "
+            "and the re-apply would go unexercised"
+        )
+
+    # last_seen tracks the layout PROVEN visible: set after every
+    # successful token read, cleared to None after every MENU this
+    # test sends - between the two the state is unknown, and the
+    # finally must neither flip a layout it cannot vouch for nor
+    # double-flip one already restored.
     last_seen = first
     try:
         leave_dialog_only()
@@ -660,7 +707,9 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
         # (21) so its object exists and carries A before the pin moves.
         open_from_menu(5)
         open_from_menu(21)
+        assert_empty_dialog("prime")
         cc_prime = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "cc_prime")
+        last_seen = cc_prime
         assert cc_prime == first, (
             f"the two primed dialogs disagree ({cc_prime!r} vs "
             f"{first!r}) before anything was switched - the walk "
@@ -672,11 +721,13 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
         # activation (20) - the reused objects must not have seen it.
         open_from_menu(20)
         before = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "switch_before")
+        last_seen = before
         assert before == first, (
             f"the fresh dialog opened {before!r} instead of {first!r} "
             "- the constructor path lost the pin before the switch"
         )
         _send("MENU")
+        last_seen = None
         utils.wait_until_static(tmp_path)
         switched = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "switch_after")
         last_seen = switched
@@ -687,14 +738,28 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
         leave_dialog_only()
 
         # The persistent cc dialog again: entry re-apply must show the
-        # pin set elsewhere - grid and footer label both, since the
-        # token is read from the rebuilt footer.
+        # pin set elsewhere. The token is read from the rebuilt footer;
+        # the grid diff below holds the painted captions to the same
+        # standard - a re-apply that moved the model and the footer but
+        # never repainted the keys would pass the token read alone.
         open_from_menu(21)
+        assert_empty_dialog("reused")
         cc_reused = _footer_band_token(tmp_path, _CENTERED_FOOTER_BAND, "cc_reused")
+        last_seen = cc_reused
         assert cc_reused == switched, (
             f"the reused cc dialog greets with {cc_reused!r} although "
             f"{switched!r} was pinned elsewhere - the entry re-apply "
             "is not working"
+        )
+        shot_prime = tmp_path / "band_cc_prime.png"
+        shot_reused = tmp_path / "band_cc_reused.png"
+        screen_w, screen_h = utils.screenshot_size(shot_reused)
+        grid_band = (0, int(screen_h * 0.47), screen_w, int(screen_h * 0.22))
+        grid_diff = utils.images_differ(shot_prime, shot_reused, crop=grid_band)
+        assert grid_diff > 500, (
+            f"the reused dialog's key grid differs from its primed "
+            f"state by only {grid_diff} pixels although the layout "
+            "switched - the captions were not repainted"
         )
         leave_dialog_only()
         leave_dialog_only()  # and the demo menu, back to the test menu
@@ -704,6 +769,7 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
         open_from_menu(10)
         legacy_reused = _footer_band_token(
             tmp_path, _LEGACY_FOOTER_BAND, "legacy_reused")
+        last_seen = legacy_reused
         assert legacy_reused == switched, (
             f"the reused legacy dialog greets with {legacy_reused!r} "
             f"although {switched!r} was pinned elsewhere - the legacy "
@@ -712,6 +778,7 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
 
         # Leave the layout as found: one MENU back to A, proven.
         _send("MENU")
+        last_seen = None
         utils.wait_until_static(tmp_path)
         restored = _footer_band_token(tmp_path, _LEGACY_FOOTER_BAND, "restored")
         last_seen = restored
@@ -721,14 +788,12 @@ def test_pin_from_elsewhere_reaches_reused_dialogs(tmp_path: Path) -> None:
         )
         leave_dialog_only()
     finally:
-        # Red or green: when the last read token says the layout is
-        # off, one MENU flips it back - after a failed assert the
-        # dialog that produced the token is still open. Then close
-        # everything; no dialog was edited, so HOME cannot hit a
-        # discard box.
-        if first is not None and last_seen is not None and last_seen != first:
-            _send("MENU")
-            utils.wait_until_static(tmp_path)
+        # Best-effort return, then close everything; no dialog was
+        # edited, so HOME cannot hit a discard box. A failing product
+        # (reused dialog stale at A while the pin holds B) is left
+        # as-is on purpose: last_seen then proves A, the helper sees
+        # nothing to flip, and blind key presses would only re-pin.
+        _restore_layout(tmp_path, first, last_seen)
         _send("HOME")
         _send("HOME")
 
