@@ -91,7 +91,8 @@ def capture_framebuffer(destination: Path, delay: float = 0.5) -> None:
     subprocess.run(["fbgrab", str(destination)], check=True)
 
 
-def capture_x11(destination: Path, delay: float = 0.5) -> None:
+def capture_x11(destination: Path, delay: float = 0.5, display: str | None = None,
+                window_fallback: bool = False) -> None:
     """Capture the screen of a PC build, which renders into X rather than a
     framebuffer device.
 
@@ -100,11 +101,41 @@ def capture_x11(destination: Path, delay: float = 0.5) -> None:
     needs a picture from an Xvfb-hosted Neutrino has to come here instead.
     """
     require_binary("import")
-    display = os.environ.get("DISPLAY")
+    display = display or os.environ.get("DISPLAY")
     if not display:
         pytest.skip("DISPLAY not set - start Neutrino under Xvfb before running this test")
     time.sleep(delay)
-    subprocess.run(["import", "-window", "root", str(destination)], check=True)
+
+    if not window_fallback:
+        subprocess.run(["import", "-display", display, "-window", "root", str(destination)],
+                       check=True)
+        return
+
+    if subprocess.run(["import", "-display", display, "-window", "root", str(destination)],
+                      capture_output=True).returncode == 0:
+        return
+
+    # Grabbing the root window is right under Xvfb, but a desktop backed by
+    # XWayland answers X_GetImage on it with BadMatch -- the root window is not
+    # readable there, while Neutrino's own top-level window still is.
+    #
+    # Off by default, and it must stay that way: this picks the first window it
+    # can read, which is not necessarily Neutrino's. A test may only ask for it
+    # when its own assertions would fail on a foreign window -- never one that
+    # merely compares two pictures, because two shots of somebody else's window
+    # compare just fine and prove nothing.
+    require_binary("xwininfo")
+    listing = subprocess.run(["xwininfo", "-display", display, "-root", "-children"],
+                             capture_output=True, text=True)
+    for window, width, height in re.findall(r"^\s+(0x[0-9a-f]+).*?\s(\d+)x(\d+)\+",
+                                            listing.stdout, re.MULTILINE):
+        if int(width) < 640 or int(height) < 480:
+            continue
+        if subprocess.run(["import", "-display", display, "-window", window, str(destination)],
+                          capture_output=True).returncode == 0:
+            return
+
+    pytest.skip("no window on this display could be captured (XWayland without a readable root?)")
 
 
 def images_differ(
