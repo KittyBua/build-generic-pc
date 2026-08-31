@@ -386,11 +386,6 @@ def _visible_layout_token(
     happily glues that into the very token this helper looks for. The
     strip holds the footer buttons plus whatever lies below the dialog,
     where stray clock digits cannot imitate a layout name.
-
-    Matched on WERTZ/WERTY without the leading Q: the capital Q is the
-    letter OCR most likes to misread (as O or 0), while the differing
-    tail letter is what actually tells the two layouts apart. Reading
-    both or neither token is failed loudly instead of guessed at.
     """
     shot = tmp_path / f"footer_{tag}.png"
     utils.capture_x11(shot)
@@ -400,15 +395,68 @@ def _visible_layout_token(
     strip = utils.crop_region(
         shot, (0, top, screen_w, screen_h - top), "footer", scale=3
     )
-    text = utils.ocr_image(strip).upper()
-    has_z = "WERTZ" in text
-    has_y = "WERTY" in text
-    if has_z == has_y:
-        pytest.fail(
-            f"footer OCR could not tell the layout apart ({tag}): "
-            f"both={has_z} in {text!r}"
-        )
-    return "QWERTZ" if has_z else "QWERTY"
+    return utils.read_layout_token(strip, tag)
+
+
+def _read_typed_letter_row(
+    tmp_path: Path, ticking: tuple[int, int, int, int] | None, tag: str
+) -> str:
+    """Type the first six keys of the letter row and read them back
+    from the field via OCR.
+
+    Expects the key selection where _open_verified() leaves it: next to
+    the space key on the bottom grid row. LEFT and UP clamp at the grid
+    edges, so overshooting lands on the letter row's first cell from
+    anywhere. The six glyphs there spell the layout's own name - qwertz
+    or qwerty - in the field's large font, which is the easiest text
+    OCR will ever get.
+
+    The selection walks back to the row start before the second shot,
+    so the diff between the two shots is the field text alone and the
+    bounding box cannot swallow the six repainted grid cells.
+    """
+    shot_pre = tmp_path / f"typed_pre_{tag}.png"
+    shot_post = tmp_path / f"typed_post_{tag}.png"
+
+    _send(*(["LEFT"] * 14))
+    _send(*(["UP"] * 2))
+    utils.capture_x11(shot_pre)
+    for _ in range(6):
+        _send("OK", "RIGHT")
+    _send(*(["LEFT"] * 6))
+    utils.capture_x11(shot_post)
+
+    x, y, w, h = utils.diff_bbox(
+        utils.blank_region(shot_pre, ticking, "notick"),
+        utils.blank_region(shot_post, ticking, "notick"),
+    )
+    screen_w, screen_h = utils.screenshot_size(shot_post)
+    pad = 8
+    box = (
+        max(0, x - pad), max(0, y - pad),
+        min(screen_w - max(0, x - pad), w + 2 * pad),
+        min(screen_h - max(0, y - pad), h + 2 * pad),
+    )
+    strip = utils.crop_region(shot_post, box, f"typed_{tag}", scale=3)
+    return utils.ocr_image(strip)
+
+
+def _restore_layout(
+    tmp_path: Path, first: str | None, last_seen: str | None
+) -> None:
+    """Best-effort return to the layout a test found, red or green.
+
+    Runs in the finally blocks: when the last token read differs from
+    the first, one MENU flips the two-layout cycle back - and pins the
+    original again, so a failing run does not leave a foreign layout in
+    the shared instance and, via saveSetup, in neutrino.conf. When a
+    token could not be read at all the visible state is unknown and
+    blind key presses would as likely make it worse; that case stays
+    documented rather than guessed at.
+    """
+    if first is not None and last_seen is not None and last_seen != first:
+        _send("MENU")
+        utils.wait_until_static(tmp_path)
 
 
 @pytest.mark.gui
@@ -421,24 +469,42 @@ def test_layout_switch_names_the_layout(tmp_path: Path) -> None:
     a relabelled button comes back pixel-identical and passes. So the
     label itself is read here, before and after one switch, and has to
     change between the two layout names.
+
+    Reading the footer alone would still wave through swapped table
+    names - QWERTY on the german grid. The second half types the six
+    letter-row keys and demands that the field spells the very token
+    the footer shows: label and effect measured against each other,
+    which is the gap this whole workitem is about.
     """
     _require_gui()
 
-    space_crop, _ticking, _sel, _nb = _open_verified(tmp_path)
+    space_crop, ticking, _sel, _nb = _open_verified(tmp_path)
+    first = None
+    last_seen = None
     try:
         first = _visible_layout_token(tmp_path, space_crop, "before")
+        last_seen = first
         _send("MENU")
         utils.wait_until_static(tmp_path)
         second = _visible_layout_token(tmp_path, space_crop, "after")
+        last_seen = second
         assert second != first, (
             f"the footer still names {first!r} after a layout switch - "
             "the label does not follow the visible key grid"
         )
-        # Back to the layout the run found, so later tests start from
-        # the state they expect.
-        _send("MENU")
-        utils.wait_until_static(tmp_path)
+
+        typed = _read_typed_letter_row(tmp_path, ticking, "after")
+        assert second.lower() in typed.lower(), (
+            f"the footer names {second!r} but the letter row typed "
+            f"{typed.strip()!r} - the label does not match the grid "
+            "it promises"
+        )
     finally:
+        # The yellow button clears the buffer; the demo dialog starts
+        # empty, so this restores the original value and EXIT will not
+        # raise the discard box even after a half-typed failure.
+        _send("YELLOW")
+        _restore_layout(tmp_path, first, last_seen)
         _leave_dialog()
 
 
@@ -460,6 +526,8 @@ def test_layout_choice_survives_reopen(tmp_path: Path) -> None:
     _require_gui()
 
     space_crop, _ticking, _sel, _nb = _open_verified(tmp_path)
+    first = None
+    switched = None
     try:
         first = _visible_layout_token(tmp_path, space_crop, "initial")
         _send("MENU")
@@ -469,20 +537,26 @@ def test_layout_choice_survives_reopen(tmp_path: Path) -> None:
             "the layout switch itself did not arrive - nothing to "
             "measure persistence on"
         )
+    except BaseException:
+        # Leaving with the switch half-proven would already pin the
+        # foreign layout; the reopen below never runs to undo it.
+        _restore_layout(tmp_path, first, switched)
+        raise
     finally:
         _leave_dialog()
 
     space_crop, _ticking, _sel, _nb = _open_verified(tmp_path)
+    last_seen = switched
     try:
         reopened = _visible_layout_token(tmp_path, space_crop, "reopened")
+        last_seen = reopened
         assert reopened == switched, (
             f"reopened dialog shows {reopened!r} instead of the "
             f"previously chosen {switched!r} - the layout choice did "
             "not survive the dialog boundary"
         )
-        _send("MENU")
-        utils.wait_until_static(tmp_path)
     finally:
+        _restore_layout(tmp_path, first, last_seen)
         _leave_dialog()
 
 

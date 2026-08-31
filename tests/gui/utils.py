@@ -471,6 +471,29 @@ def wait_until_static(
     return False
 
 
+def _converted(image: Path, args: list[str], suffix: str, what: str) -> Path:
+    """Copy of the image run through `convert` with the given args.
+
+    Removed first, and the exit status checked: the name is reused
+    across retries, so a failed conversion would otherwise leave the
+    previous run's picture in place and every measurement below would
+    quietly run on stale pixels.
+    """
+    require_binary("convert")
+    out = image.parent / f"{image.stem}_{suffix}.png"
+    out.unlink(missing_ok=True)
+    proc = subprocess.run(
+        ["convert", str(image), *args, str(out)],
+        capture_output=True,
+    )
+    if proc.returncode != 0 or not out.exists():
+        pytest.fail(
+            f"convert could not {what} {image}: "
+            f"{(proc.stderr or b'').decode(errors='ignore').strip()!r}"
+        )
+    return out
+
+
 def blank_region(
     image: Path, region: tuple[int, int, int, int] | None, suffix: str
 ) -> Path:
@@ -478,25 +501,12 @@ def blank_region(
     can ignore it. Returns the original when region is None."""
     if region is None:
         return image
-    require_binary("convert")
     x, y, w, h = region
-    out = image.parent / f"{image.stem}_{suffix}.png"
-    # Removed first, and the exit status checked: the name is reused
-    # across retries, so a failed conversion would otherwise leave the
-    # previous run's picture in place and every measurement below would
-    # quietly run on stale pixels.
-    out.unlink(missing_ok=True)
-    proc = subprocess.run(
-        ["convert", str(image), "-fill", "black", "-draw",
-         f"rectangle {x},{y} {x + w},{y + h}", str(out)],
-        capture_output=True,
+    return _converted(
+        image,
+        ["-fill", "black", "-draw", f"rectangle {x},{y} {x + w},{y + h}"],
+        suffix, f"blank {region} in",
     )
-    if proc.returncode != 0 or not out.exists():
-        pytest.fail(
-            f"convert could not blank {region} in {image}: "
-            f"{(proc.stderr or b'').decode(errors='ignore').strip()!r}"
-        )
-    return out
 
 
 def crop_region(
@@ -505,24 +515,11 @@ def crop_region(
 ) -> Path:
     """Copy of the image reduced to the region, optionally scaled up -
     OCR on a small screen font gains a lot from a 3x enlargement."""
-    require_binary("convert")
     x, y, w, h = region
-    out = image.parent / f"{image.stem}_{suffix}.png"
-    # Removed first, and the exit status checked: the name is reused
-    # across retries, so a failed conversion would otherwise leave the
-    # previous run's picture in place and every measurement below would
-    # quietly run on stale pixels.
-    out.unlink(missing_ok=True)
-    cmd = ["convert", str(image), "-crop", f"{w}x{h}+{x}+{y}", "+repage"]
+    args = ["-crop", f"{w}x{h}+{x}+{y}", "+repage"]
     if scale > 1:
-        cmd += ["-resize", f"{scale * 100}%"]
-    proc = subprocess.run(cmd + [str(out)], capture_output=True)
-    if proc.returncode != 0 or not out.exists():
-        pytest.fail(
-            f"convert could not crop {region} from {image}: "
-            f"{(proc.stderr or b'').decode(errors='ignore').strip()!r}"
-        )
-    return out
+        args += ["-resize", f"{scale * 100}%"]
+    return _converted(image, args, suffix, f"crop {region} from")
 
 
 def inset(crop: tuple[int, int, int, int], by: int) -> tuple[int, int, int, int]:
@@ -579,6 +576,34 @@ def installed_icon(name: str) -> Path | None:
         return None
     candidate = tree / f"{name}.png"
     return candidate if candidate.exists() else None
+
+
+def read_layout_token(strip: Path, tag: str, case_sensitive: bool = False) -> str:
+    """The keyboard layout name OCR finds in the image: QWERTZ or QWERTY.
+
+    Matched on WERTZ/WERTY without the leading Q: the capital Q is the
+    letter OCR most likes to misread (as O or 0), while the differing
+    tail letter is what actually tells the two layouts apart. Reading
+    both or neither token is failed loudly instead of guessed at.
+
+    Two ways to keep the key grid from spelling the token: crop it away
+    and match case-folded (the cc dialog, whose footer strip is easy to
+    cut), or keep the whole picture and match case-sensitively - the
+    footer writes the layout name in capitals while an uncapsed grid
+    spells its letters small (the legacy dialog, which floats centered
+    and has no fixed strip to cut).
+    """
+    text = ocr_image(strip)
+    if not case_sensitive:
+        text = text.upper()
+    has_z = "WERTZ" in text
+    has_y = "WERTY" in text
+    if has_z == has_y:
+        pytest.fail(
+            f"OCR could not tell the layout apart ({tag}): "
+            f"both={has_z} in {text!r}"
+        )
+    return "QWERTZ" if has_z else "QWERTY"
 
 
 def ocr_image(path: Path) -> str:
