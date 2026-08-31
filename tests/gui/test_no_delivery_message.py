@@ -136,8 +136,10 @@ def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) ->
             time.sleep(0.5)
         assert fifo.exists(), "input FIFO never appeared"
 
-        # Channel up: the message is raised by a failing zap, and the one at
-        # startup happens before the infoviewer can show anything.
+        # A key press to reach the dialog. The box on screen is the startup
+        # one -- the failing zap at startup does raise it -- so this mostly
+        # serves to get past whatever the run settled on and to prove the
+        # dialog takes input at all.
         _send("UP")
         time.sleep(5)
 
