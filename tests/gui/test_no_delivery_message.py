@@ -22,9 +22,9 @@ import pytest
 
 from . import utils
 from .neutrino_run import (
-    debug_logging_built_in,
     IsolatedNeutrino,
-NEUTRINO_DATA,
+    NEUTRINO_DATA,
+    debug_logging_built_in,
     require_isolated_run,
     send_keys,
     settle,

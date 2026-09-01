@@ -21,11 +21,10 @@ import pytest
 
 from . import utils
 from .neutrino_run import (
-    debug_logging_built_in,
     IsolatedNeutrino,
+    debug_logging_built_in,
     require_isolated_run,
     require_no_frontend,
-ROOT_DIR,
     send_keys,
     settle,
 )

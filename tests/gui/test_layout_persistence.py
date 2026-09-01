@@ -29,7 +29,7 @@ import pytest
 
 from . import utils
 from .neutrino_run import (
-CONFIG_MOUNT,
+    CONFIG_MOUNT,
     IsolatedNeutrino,
     OwnedDisplay,
     require_isolated_run,
