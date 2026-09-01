@@ -15,7 +15,6 @@ import glob
 import os
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -23,11 +22,11 @@ import pytest
 
 from . import utils
 from .neutrino_run import (
-    NEUTRINO_DATA,
-    ROOT_DIR,
-    IsolatedNeutrino,
     debug_logging_built_in,
+    IsolatedNeutrino,
+NEUTRINO_DATA,
     require_isolated_run,
+    send_keys,
     settle,
 )
 
@@ -99,18 +98,6 @@ def _seed_config(config: Path) -> None:
     )
 
 
-def _send(*keys: str) -> None:
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "tests.gui.send_keys", *keys],
-            check=True,
-            capture_output=True,
-            cwd=ROOT_DIR,
-        )
-    except subprocess.CalledProcessError as exc:
-        utils.fail_or_skip(exc)
-
-
 @pytest.mark.gui
 def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) -> None:
     _require_misconfigurable_tuner()
@@ -139,7 +126,7 @@ def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) ->
         # one -- the failing zap at startup does raise it -- so this mostly
         # serves to get past whatever the run settled on and to prove the
         # dialog takes input at all.
-        _send("UP")
+        send_keys("UP")
         time.sleep(5)
 
         shot = tmp_path / "message.png"
@@ -166,7 +153,7 @@ def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) ->
         # it. Waiting on Neutrino's own log line does not work either: its
         # stdout is block-buffered into the log file and the line arrives long
         # after the menu does.
-        _send("OK")
+        send_keys("OK")
 
         # Poll for the menu rather than photographing once after a guessed
         # delay. Two things make a single shot unreliable: the setup is painted

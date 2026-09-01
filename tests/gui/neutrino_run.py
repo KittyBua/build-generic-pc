@@ -9,6 +9,7 @@ they were written -- each one records a trap that cost a debugging round.
 import glob
 import os
 import re
+import sys
 import shutil
 import signal
 import subprocess
@@ -239,3 +240,29 @@ def settle(shot: Path, display: str, tries: int = 20, windows: list | None = Non
         if prev is not None and cur == prev:
             return
         prev = cur
+
+
+def send_keys(*keys: str, settle_for: float = 0.0) -> None:
+    """Replay remote-control keys into the running Neutrino.
+
+    One helper for the four GUI test modules that used to keep a copy each,
+    with the most defensive set of the four: a missing interpreter, a missing
+    evdev and a readerless FIFO are environment gaps and skip, everything else
+    is a defect and fails (utils.fail_or_skip). `settle_for` is the pause some
+    callers need before looking at the screen; the default is no pause.
+    """
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "tests.gui.send_keys", *keys],
+            check=True,
+            capture_output=True,
+            cwd=ROOT_DIR,
+        )
+    except FileNotFoundError:
+        pytest.skip("python3 not available to replay keys")
+    except subprocess.CalledProcessError as exc:
+        utils.fail_or_skip(exc)
+    except SystemExit as exc:  # send_keys handles missing evdev
+        pytest.skip(str(exc))
+    if settle_for:
+        time.sleep(settle_for)

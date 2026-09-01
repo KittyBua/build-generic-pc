@@ -22,8 +22,6 @@
 
 import os
 import shutil
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -31,10 +29,11 @@ import pytest
 
 from . import utils
 from .neutrino_run import (
-    CONFIG_MOUNT,
+CONFIG_MOUNT,
     IsolatedNeutrino,
     OwnedDisplay,
     require_isolated_run,
+    send_keys,
     settle,
 )
 
@@ -43,19 +42,6 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 # Seconds to let the GUI settle after a key batch (matches the input
 # dialog suite; menus open fast, the legacy dialog paints a keyboard).
 SETTLE = 1.3
-
-
-def _send(*keys: str) -> None:
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "tests.gui.send_keys", *keys],
-            check=True,
-            capture_output=True,
-            cwd=ROOT_DIR,
-        )
-    except subprocess.CalledProcessError as exc:
-        utils.fail_or_skip(exc)
-    time.sleep(SETTLE)
 
 
 def _set_conf_value(conf: Path, key: str, value: str) -> None:
@@ -97,6 +83,11 @@ def _prepared_instance(
     _set_conf_value(conf, "keyboard_layout", keyboard_layout)
     return IsolatedNeutrino(workdir, display, simulate_fe="1")
 
+
+def _send(*keys: str) -> None:
+    """send_keys() with this module's settle pause, which every call here
+    relied on: menus open fast, the legacy dialog paints a whole keyboard."""
+    send_keys(*keys, settle_for=SETTLE)
 
 def _wait_for_gui(instance: IsolatedNeutrino, display: str, shot: Path) -> None:
     """FIFO up is not GUI up: rcinput opens the pipe long before the

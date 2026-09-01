@@ -14,8 +14,6 @@
 
 import os
 import re
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -23,20 +21,14 @@ import pytest
 
 from . import utils
 from .neutrino_run import (
-    ROOT_DIR,
-    IsolatedNeutrino,
     debug_logging_built_in,
+    IsolatedNeutrino,
     require_isolated_run,
     require_no_frontend,
+ROOT_DIR,
+    send_keys,
     settle,
 )
-
-
-
-
-
-
-
 
 
 @pytest.fixture
@@ -48,22 +40,6 @@ def tunerless(tmp_path: Path, owned_display):
         yield instance
     finally:
         instance.stop()
-
-
-def _send(*keys: str) -> None:
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "tests.gui.send_keys", *keys],
-            check=True,
-            capture_output=True,
-            cwd=ROOT_DIR,
-        )
-    except subprocess.CalledProcessError as exc:
-        # Same classification as the rest of the suite: a missing evdev or a
-        # readerless FIFO is an environment gap, not a defect (utils).
-        utils.fail_or_skip(exc)
-
-
 
 
 @pytest.mark.gui
@@ -92,18 +68,18 @@ def test_tunerless_wizard_shows_defaults_and_survives_next(tunerless, owned_disp
     shot = tmp_path / "step.png"
 
     # Info box (no usable tuner) -> language list -> Deutsch.
-    _send("OK")
+    send_keys("OK")
     assert tunerless.wait_for("menue setup"), "Neutrino did not reach the wizard"
     settle(shot, owned_display.display)
-    _send("UP", "OK")
+    send_keys("UP", "OK")
     settle(shot, owned_display.display)
 
     # Walk the wizard up to the tuner page the way a user does. The pages in
     # between (video, OSD, network) all end on a "next" forwarder.
     for _ in range(3):
-        _send("OK")
+        send_keys("OK")
         settle(shot, owned_display.display)
-    _send("BACK")  # the network page's OK opened its interface submenu
+    send_keys("BACK")  # the network page's OK opened its interface submenu
     settle(shot, owned_display.display)
 
     text = utils.ocr_image(shot)
@@ -115,7 +91,7 @@ def test_tunerless_wizard_shows_defaults_and_survives_next(tunerless, owned_disp
 
     # The key that used to segfault: leaving the tuner page runs saveScanSetup()
     # -> CZapit::SetConfig() -> SaveSettings().
-    _send("OK")
+    send_keys("OK")
     settle(shot, owned_display.display)
     assert tunerless.alive(), "Neutrino died on 'next' in the tuner page"
 
