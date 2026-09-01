@@ -107,8 +107,15 @@ def debug_logging_built_in() -> bool:
 
 def root_children(display: str) -> set:
     """Window ids currently below the root window."""
-    listing = subprocess.run(["xwininfo", "-display", display, "-root", "-children"],
-                             capture_output=True, text=True)
+    try:
+        listing = subprocess.run(["xwininfo", "-display", display, "-root", "-children"],
+                                 capture_output=True, text=True)
+    except OSError:
+        # Every isolated run calls this, not just the tests that photograph
+        # something. A host without x11-utils must not die here with a
+        # FileNotFoundError -- callers that need the list skip when it is
+        # empty, and the rest never look.
+        return set()
     return set(re.findall(r"^\s+(0x[0-9a-f]+)", listing.stdout, re.MULTILINE))
 
 
@@ -223,11 +230,11 @@ def require_no_frontend() -> None:
         pytest.skip("needs a machine without a DVB frontend; one is present")
 
 
-def settle(shot: Path, display: str, tries: int = 20) -> None:
+def settle(shot: Path, display: str, tries: int = 20, windows: list | None = None) -> None:
     """Wait for two identical frames, then keep the shot."""
     prev = None
     for _ in range(tries):
-        utils.capture_x11(shot, delay=0.4, display=display)
+        utils.capture_x11(shot, delay=0.4, display=display, windows=windows)
         cur = shot.read_bytes()
         if prev is not None and cur == prev:
             return

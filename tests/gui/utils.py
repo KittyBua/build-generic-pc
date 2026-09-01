@@ -111,19 +111,13 @@ def capture_x11(destination: Path, delay: float = 0.5, display: str | None = Non
                        check=True)
         return
 
-    if subprocess.run(["import", "-display", display, "-window", "root", str(destination)],
-                      capture_output=True).returncode == 0:
-        return
-
-    # Grabbing the root window is right under Xvfb, but a desktop backed by
-    # XWayland answers X_GetImage on it with BadMatch -- the root window is not
-    # readable there, while an application's own top-level window still is.
-    #
-    # `windows` must be the caller's own windows, never "whatever is on this
-    # display". A screenshot of a stranger's editor can satisfy assertions
-    # about text that also exists in the source tree, and then the test proves
-    # nothing while looking green. IsolatedNeutrino.windows() supplies the ids
-    # by diffing the root's children across the run's start.
+    # No root grab here, not even as a first try. On a desktop where the root
+    # window *is* readable it would photograph the whole screen, and the
+    # caller passed a window list precisely because a stranger's window in the
+    # picture could satisfy its assertions -- text about Neutrino also exists
+    # in the source tree and in any open diff. `windows` must be the caller's
+    # own; IsolatedNeutrino.windows() supplies them by diffing the root's
+    # children across the run's start.
     for window in windows:
         if subprocess.run(["import", "-display", display, "-window", window, str(destination)],
                           capture_output=True).returncode == 0:

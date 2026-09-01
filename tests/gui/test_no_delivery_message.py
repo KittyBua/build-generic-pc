@@ -28,6 +28,7 @@ from .neutrino_run import (
     IsolatedNeutrino,
     debug_logging_built_in,
     require_isolated_run,
+    settle,
 )
 
 
@@ -110,8 +111,6 @@ def _send(*keys: str) -> None:
         utils.fail_or_skip(exc)
 
 
-
-
 @pytest.mark.gui
 def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) -> None:
     _require_misconfigurable_tuner()
@@ -160,12 +159,36 @@ def test_disabled_tuner_is_named_and_reachable(tmp_path: Path, owned_display) ->
         # ...and the way out. Pressing it used to segfault: exec() enters the
         # message loop without painting, and the first key scrolled a text box
         # that did not exist.
+        # Wait for the screen to change, not for a guessed number of seconds.
+        # Measured here, the setup menu is painted about 4.4 s after the key --
+        # a fixed sleep(4) failed roughly half the runs, and make test-gui
+        # stops at the first failure, so one flaky test takes the suite with
+        # it. Waiting on Neutrino's own log line does not work either: its
+        # stdout is block-buffered into the log file and the line arrives long
+        # after the menu does.
         _send("OK")
-        time.sleep(4)
-        assert instance.alive(), "Neutrino died on the tuner setup button"
 
-        utils.capture_x11(shot, display=owned_display.display, windows=instance.windows())
-        menu = utils.ocr_image(shot)
+        # Poll for the menu rather than photographing once after a guessed
+        # delay. Two things make a single shot unreliable: the setup is painted
+        # about 4.4 s after the key, and the channel keeps being re-zapped, so
+        # a fresh failure box can cover the menu for a moment -- correctly, the
+        # re-entry guard turns it into a plain hint. Neither is a defect, and
+        # neither should decide whether this test passes. Waiting on Neutrino's
+        # log line does not work: its stdout is block-buffered into the log
+        # file and arrives long after the menu does.
+        #
+        # "Timeout" is the menu entry "Tuning Timeout", not an expired one --
+        # either it or the mode column proves the frontend setup is up.
+        menu = ""
+        deadline = time.monotonic() + 40
+        while time.monotonic() < deadline:
+            settle(shot, owned_display.display, windows=instance.windows())
+            menu = utils.ocr_image(shot)
+            if "Independent" in menu or "Timeout" in menu:
+                break
+            time.sleep(0.5)
+
+        assert instance.alive(), "Neutrino died on the tuner setup button"
         assert "Independent" in menu or "Timeout" in menu, (
             f"the button did not open the tuner setup: {menu!r}"
         )
