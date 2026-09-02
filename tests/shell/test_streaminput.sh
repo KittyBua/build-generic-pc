@@ -239,6 +239,17 @@ int main(void)
 	/* a media fragment does not hide the playlist suffix */
 	printf("protocol-fragment\t%d\n",
 		(int)streaminput_detect_protocol("https://a/x.m3u8#t=30"));
+	/* the protocol vocabulary, in enum order: the log field neutrino
+	 * prints from the resolved source (M3) */
+	printf("protocol-names\t%d=%s %d=%s %d=%s %d=%s %d=%s %d=%s\n",
+		(int)STREAM_PROTOCOL_UNKNOWN, streaminput_protocol_name(STREAM_PROTOCOL_UNKNOWN),
+		(int)STREAM_PROTOCOL_HTTP, streaminput_protocol_name(STREAM_PROTOCOL_HTTP),
+		(int)STREAM_PROTOCOL_HLS, streaminput_protocol_name(STREAM_PROTOCOL_HLS),
+		(int)STREAM_PROTOCOL_DASH, streaminput_protocol_name(STREAM_PROTOCOL_DASH),
+		(int)STREAM_PROTOCOL_RTSP, streaminput_protocol_name(STREAM_PROTOCOL_RTSP),
+		(int)STREAM_PROTOCOL_FILE, streaminput_protocol_name(STREAM_PROTOCOL_FILE));
+	/* the documented out-of-range contract: never NULL, "unknown" */
+	printf("protocol-name-oor\t%s\n", streaminput_protocol_name((stream_protocol_t)99));
 	/* failure classification of the codes the app path maps today */
 	printf("classes\t%s %s %s %s %s %s\n",
 		streaminput_failure_class_name(streaminput_classify(STREAM_ERR_CONNECTION_RESET, 0)),
@@ -340,6 +351,10 @@ check redact-trunc8 'https:/' \
 check protocols '2 1 3 4 5' "protocol detection covers hls/http/dash/rtsp/file"
 check protocol-fragment '2' \
 	"a media fragment (#t=30) does not hide the .m3u8 suffix"
+check protocol-names '0=unknown 1=http 2=hls 3=dash 4=rtsp 5=file' \
+	"the protocol names are stable lowercase tokens, ordinals pinned too"
+check protocol-name-oor 'unknown' \
+	"an out-of-range protocol value names itself unknown, never NULL"
 
 # Failure classes for the codes the WebTV path classifies today.
 check classes 'temporary-network invalid-manifest http-5xx aborted http-5xx http-4xx' \
@@ -394,6 +409,9 @@ else
 	cat > "$WORK/bridge_driver.c" <<'EOF'
 #include <stdio.h>
 #include <streaminput_ffmpeg.h>
+#ifdef HAVE_WEBTV_FAILURE_MAP
+#include <webtv_failure_map.h>
+#endif
 
 /* The bridge's entry points are static inline and their only libav
  * reference is av_dict_set(), so no libavutil is linked: AVDictionary
@@ -508,6 +526,60 @@ int main(int argc, char **argv)
 		streaminput_failure_class_name(streaminput_classify_averror(AVERROR_PROTOCOL_NOT_FOUND)));
 	printf("%s-averror-name\t%s\n", prefix,
 		streaminput_error_code_name(streaminput_error_from_averror(AVERROR(ECONNRESET))));
+	/* the protocol name reached from this leg too: its first real
+	 * consumer (neutrino's resolve log) is C++ */
+	printf("%s-protocol-name\t%s\n", prefix, streaminput_protocol_name(STREAM_PROTOCOL_HLS));
+#ifdef HAVE_WEBTV_FAILURE_MAP
+	/* neutrino's app-side table over the live core: the four verdicts
+	 * that are ever restarted, and the fall-through for everything the
+	 * app has no word for -- EIO, timeouts, 4xx, EOF, no protocol, 0 */
+	printf("%s-webtv-map\t%s %s %s %s %s %s %s %s %s %s %s\n", prefix,
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR(ECONNRESET))),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR_HTTP_SERVER_ERROR)),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR_EXIT)),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR_INVALIDDATA)),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR(EIO))),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR(ETIMEDOUT))),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR(ECONNREFUSED))),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR_HTTP_NOT_FOUND)),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR_EOF)),
+		webtv_map_verdict_name(webtv_map_core_failure(AVERROR_PROTOCOL_NOT_FOUND)),
+		webtv_map_verdict_name(webtv_map_core_failure(0)));
+#ifdef WEBTV_MAP_EXHAUSTIVE
+	/* The C leg sweeps EVERY negative int: exactly four codes may leave
+	 * the fall-through (ECONNRESET, INVALIDDATA, HTTP_SERVER_ERROR, EXIT).
+	 * A new code routed to a restartable class anywhere in the core --
+	 * an errno, a tag constant, a raw value -- changes this count,
+	 * whatever its name. About 8 s at -O2; that is the price of a proof
+	 * that does not depend on knowing the constants. */
+	{
+		unsigned long hits = 0;
+		long long c;
+		for (c = -2147483648LL; c < 0; c++)
+			if (webtv_map_core_failure((int)c) != WEBTV_MAP_FALLTHROUGH)
+				hits++;
+		printf("%s-webtv-map-sweep\tall-negative hits=%lu\n", prefix, hits);
+	}
+#else
+	/* the C++ leg keeps a cheap sweep: every errno-style code (1..4095,
+	 * negated) and the tag constants the core translates; the exhaustive
+	 * proof runs in the C leg */
+	{
+		int errno_hits = 0, tag_hits = 0, e;
+		int tags[] = { AVERROR_INVALIDDATA, AVERROR_EXIT, AVERROR_EOF, AVERROR_HTTP_BAD_REQUEST,
+			AVERROR_HTTP_UNAUTHORIZED, AVERROR_HTTP_FORBIDDEN, AVERROR_HTTP_NOT_FOUND,
+			AVERROR_HTTP_OTHER_4XX, AVERROR_HTTP_SERVER_ERROR, AVERROR_PROTOCOL_NOT_FOUND,
+			AVERROR_BUG, AVERROR_UNKNOWN, AVERROR_STREAM_NOT_FOUND };
+		for (e = 1; e < 4096; e++)
+			if (webtv_map_core_failure(AVERROR(e)) != WEBTV_MAP_FALLTHROUGH)
+				errno_hits++;
+		for (e = 0; e < (int)(sizeof(tags) / sizeof(tags[0])); e++)
+			if (webtv_map_core_failure(tags[e]) != WEBTV_MAP_FALLTHROUGH)
+				tag_hits++;
+		printf("%s-webtv-map-sweep\terrno=%d tags=%d\n", prefix, errno_hits, tag_hits);
+	}
+#endif
+#endif
 	return 0;
 }
 EOF
@@ -522,6 +594,18 @@ EOF
 	[ -n "$CXX" ] || CXX=c++
 	CXX_PROBE="$(probe_target "$CXX")"
 
+	# neutrino's app-side failure map (src/gui/webtv_failure_map.h) needs
+	# only this bridge, so both legs pin it here against the live core --
+	# the guard against a remapping in libstb-hal widening the WebTV
+	# restart set. Skipped, counted, when no neutrino tree is around.
+	NEU_DIR="${NEUTRINO_DIR:-$ROOT_DIR/sources/neutrino}"
+	MAPFLAGS=""
+	if [ -f "$NEU_DIR/src/gui/webtv_failure_map.h" ]; then
+		MAPFLAGS="-DHAVE_WEBTV_FAILURE_MAP -I $NEU_DIR/src/gui"
+	else
+		skipped "no neutrino tree at $NEU_DIR; the WebTV failure map is not pinned"
+	fi
+
 	BRIDGE_LANGS=""
 	if ! $CC -std=c99 -Wall -Wextra -Werror -I "$INC" \
 		-c "$SRC" -o "$WORK/streaminput.o" 2> "$WORK/mod.err"; then
@@ -534,8 +618,8 @@ EOF
 		# same dialect as the production callers (gnu++17,
 		# make/toolchain.mk CXXFLAGS) -- proving the contract under a
 		# dialect no consumer uses would prove the wrong thing.
-		if ! $CC -std=c99 -Wall -Wextra -Werror -I "$INC" -isystem "$AVINC" \
-			"$WORK/bridge_driver.c" "$WORK/streaminput.o" ${AVINC2:+-isystem "$AVINC2"} -o "$WORK/bridge_c" \
+		if ! $CC -std=c99 -O2 -Wall -Wextra -Werror -I "$INC" -isystem "$AVINC" $MAPFLAGS \
+			${MAPFLAGS:+-DWEBTV_MAP_EXHAUSTIVE} "$WORK/bridge_driver.c" "$WORK/streaminput.o" ${AVINC2:+-isystem "$AVINC2"} -o "$WORK/bridge_c" \
 			2> "$WORK/brc.err"; then
 			no "bridge driver builds and links as c" "$(head -3 "$WORK/brc.err")"
 		elif ! "$WORK/bridge_c" c > "$WORK/out.bc" 2>&1; then
@@ -547,7 +631,7 @@ EOF
 		fi
 		if ! command -v "$CXX_PROBE" >/dev/null 2>&1; then
 			skipped "no C++ compiler ($CXX_PROBE); the extern \"C\" link proof did not run"
-		elif ! $CXX -std=gnu++17 -Wall -Wextra -Werror -I "$INC" -isystem "$AVINC" \
+		elif ! $CXX -std=gnu++17 -Wall -Wextra -Werror -I "$INC" -isystem "$AVINC" $MAPFLAGS \
 			"$WORK/bridge_driver.cpp" "$WORK/streaminput.o" ${AVINC2:+-isystem "$AVINC2"} -o "$WORK/bridge_cxx" \
 			2> "$WORK/brx.err"; then
 			no "bridge driver builds and links as c++ (extern \"C\" contract)" \
@@ -576,6 +660,20 @@ EOF
 			"averror translation ($lang): real AVERROR constants land in the documented classes"
 		check "$lang-averror-name" 'connection-reset' \
 			"averror translation ($lang): error_from_averror feeds the stable code names"
+		check "$lang-protocol-name" 'hls' \
+			"protocol name ($lang): the symbol links and answers from this leg"
+		if [ -n "$MAPFLAGS" ]; then
+			check "$lang-webtv-map" \
+				'reset-by-peer http-server-error immediate-exit invalid-data fallthrough fallthrough fallthrough fallthrough fallthrough fallthrough fallthrough' \
+				"webtv failure map ($lang): four restartable verdicts, everything else falls through"
+			if [ "$lang" = c ]; then
+				check "$lang-webtv-map-sweep" 'all-negative hits=4' \
+					"webtv failure map ($lang): across every negative int exactly four codes reach a restartable verdict"
+			else
+				check "$lang-webtv-map-sweep" 'errno=1 tags=3' \
+					"webtv failure map ($lang): errno and tag sweep, no other code reaches a restartable verdict"
+			fi
+		fi
 	done
 fi
 
