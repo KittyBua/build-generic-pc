@@ -338,9 +338,13 @@ def test_the_colour_keys_are_available() -> None:
 
 
 def test_unknown_key_names_are_refused() -> None:
+    # Deliberately not a plausible key name. This test used to say "POWER",
+    # which stopped being unknown the day the power key was added to the map --
+    # and then failed by reaching the FIFO instead of the rejection under test.
+    # Pick something that can never become a real key.
     with pytest.raises(ValueError) as exc:
-        send_keys.replay(["POWER"])
-    assert "POWER" in str(exc.value)
+        send_keys.replay(["NO_SUCH_KEY"])
+    assert "NO_SUCH_KEY" in str(exc.value)
 
 
 def test_a_live_fifo_wins_over_uinput(fifo: str, monkeypatch) -> None:

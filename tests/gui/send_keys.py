@@ -44,6 +44,11 @@ KEYS = {
     # paints. Tests that need that machinery active have no other way to switch
     # it on from outside.
     "MUTE": "KEY_MUTE",
+    # the power key is the one key rcinput reports twice: once for the press
+    # and, unlike every other key, once more for the release (rcinput.cpp,
+    # RC_standby). A dialog that consumes the press itself leaves the release
+    # for whoever runs next, so tests that press it are testing that handover.
+    "POWER": "KEY_POWER",
     # menus do NOT wrap on page-up ("...but not if already at top" in
     # menue.cpp): a few PAGEUPs land on the first entry no matter which
     # selection the menu remembered - the reset that UP/DOWN (which do
@@ -121,6 +126,7 @@ KEY_CODES = {
     "KEY_YELLOW": 400,
     "KEY_BLUE": 401,
     "KEY_MUTE": 113,
+    "KEY_POWER": 116,
     "KEY_PAGEUP": 104,
     # Letter keys, for the direct typing path. CRCInput::translate() passes
     # unknown codes through unchanged and CRCInput::getUnicodeValue() indexes
