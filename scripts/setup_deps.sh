@@ -135,9 +135,11 @@ fi
 
 SYSTEM_PACKAGES_APT=("${CORE_PACKAGES_APT[@]}" "${OPTIONAL_PACKAGES_APT[@]}")
 
+# diffutils: cmp, which the ffmpeg configure stamp compares its record with;
+# essential on Debian, a normal package on Fedora that a minimal image lacks.
 CORE_PACKAGES_DNF=(
   gcc gcc-c++ make git pkgconf-pkg-config cmake ninja-build nasm automake autoconf libtool
-  curl rsync patch xz
+  curl rsync patch xz diffutils
   gettext openssl-devel libcurl-devel libjpeg-turbo-devel libpng-devel libtiff-devel
   glew-devel freeglut-devel libao-devel libmad-devel
   libid3tag-devel giflib-devel flac-devel readline-devel lua-devel luajit-devel
@@ -217,9 +219,11 @@ pm_install() {
 
 # Commands the build invokes directly. Package names differ per distro, so the
 # preflight reports the command and lets the package list carry the mapping.
+# cmp: the ffmpeg configure stamp compares its record with it; without cmp
+# every pass would read as a changed record and rebuild ffmpeg from scratch.
 REQUIRED_COMMANDS=(
   gcc g++ make git pkg-config autoconf automake libtool
-  rsync patch tar python3
+  rsync patch tar python3 cmp
 )
 
 # One of these is enough: the download helpers accept either.

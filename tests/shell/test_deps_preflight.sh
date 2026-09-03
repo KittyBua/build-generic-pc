@@ -272,6 +272,21 @@ else
 	esac
 fi
 
+# cmp is what the ffmpeg configure stamp compares its record with, and a
+# missing cmp reads as "changed" on every pass: a full ffmpeg rebuild each
+# time, with no message about why. It has to be a required command.
+probe7="$WORK/probe7.sh"
+sed -n '1,/^ensure_log$/p' "$SCRIPT" | sed '$d' > "$probe7"
+cat >> "$probe7" <<'PROBE'
+in_array() { local n="$1"; shift; local x; for x in "$@"; do [ "$x" = "$n" ] && return 0; done; return 1; }
+in_array cmp "${REQUIRED_COMMANDS[@]}" && echo "HAS_CMP" || echo "NO_CMP"
+PROBE
+cmp_out="$("$BASH_BIN" "$probe7" 2>&1)"
+case "$cmp_out" in
+	*HAS_CMP*) ok "cmp is a required command" ;;
+	*) ko "cmp is a required command" "got: $cmp_out" ;;
+esac
+
 # --------------------------------------------------------------- summary
 printf -- '----\n'
 printf '[test-deps-preflight] pass=%s fail=%s\n' "$pass" "$fail"
