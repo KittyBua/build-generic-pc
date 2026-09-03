@@ -551,7 +551,11 @@ neutrino-debug: ## Build a debug-friendly Neutrino tree (-O0/-g3, separate dirs)
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR_DEBUG) \
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_DEBUG) \
 		neutrino
-	@$(MAKE) NEUTRINO_BUILD_DIR=$(NEUTRINO_BUILD_DIR_DEBUG) \
+	@# Same flags as the build above: runtime-sync walks the install stamp and
+	@# with it the ffmpeg configure record, which carries the compiler flags.
+	@# Without them this pass would rebuild ffmpeg and the tree as release.
+	@$(MAKE) DEBUG_BUILD=1 \
+		NEUTRINO_BUILD_DIR=$(NEUTRINO_BUILD_DIR_DEBUG) \
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR_DEBUG) \
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_DEBUG) \
 		runtime-sync
@@ -563,7 +567,8 @@ neutrino-asan: ## Build an ASan/UBSan-enabled Neutrino tree (separate dirs)
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR_ASAN) \
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_ASAN) \
 		neutrino
-	@$(MAKE) NEUTRINO_BUILD_DIR=$(NEUTRINO_BUILD_DIR_ASAN) \
+	@$(MAKE) DEBUG_BUILD=1 ENABLE_ASAN=1 ENABLE_UBSAN=1 \
+		NEUTRINO_BUILD_DIR=$(NEUTRINO_BUILD_DIR_ASAN) \
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR_ASAN) \
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_ASAN) \
 		runtime-sync
@@ -575,7 +580,8 @@ neutrino-tsan: ## Build a TSAN-enabled Neutrino tree (separate dirs)
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR_TSAN) \
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_TSAN) \
 		neutrino
-	@$(MAKE) NEUTRINO_BUILD_DIR=$(NEUTRINO_BUILD_DIR_TSAN) \
+	@$(MAKE) DEBUG_BUILD=1 ENABLE_TSAN=1 \
+		NEUTRINO_BUILD_DIR=$(NEUTRINO_BUILD_DIR_TSAN) \
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR_TSAN) \
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_TSAN) \
 		runtime-sync
@@ -598,7 +604,7 @@ run-gdb: neutrino runtime-sync ## Launch Neutrino inside gdb (headless)
 
 .PHONY: run-gdb-debug
 run-gdb-debug: ## Launch debug build inside gdb (headless, separate dirs)
-	@$(MAKE) ALLOW_NON_ROOT=1 \
+	@$(MAKE) ALLOW_NON_ROOT=1 DEBUG_BUILD=1 \
 		NEUTRINO_BUILD_DIR=$(NEUTRINO_BUILD_DIR_DEBUG) \
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR_DEBUG) \
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_DEBUG) \

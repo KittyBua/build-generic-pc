@@ -293,6 +293,37 @@ else
 	ko "with ccache CC is wrapped" "got '$cc_some'"
 fi
 
+# --- variants: every sub-make of a variant target carries the variant flags -
+# neutrino-debug/-asan/-tsan build in a second $(MAKE) and then stage with a
+# third. runtime-sync walks the install stamp and with it the ffmpeg configure
+# record, which carries the compiler flags: a staging pass without
+# DEBUG_BUILD=1 would rebuild ffmpeg as release and drag the sanitizer tree
+# through a release reconfigure. run-gdb-debug reaches the same stamps.
+variant_case() { # $1 = target, $2.. = flags every $(MAKE) line must carry
+	vc_target="$1"; shift
+	vc_lines="$(awk -v t="$vc_target" '
+		$0 ~ "^"t":" { in_t = 1; next }
+		in_t && /^[^ \t#]/ { in_t = 0 }
+		in_t { sub(/^[ \t]+/, ""); line = line " " $0
+			if ($0 !~ /\\$/) { if (line ~ /\$\(MAKE\)/) print line; line = "" } }
+	' "$ROOT_DIR/make/main.mk")"
+	vc_count="$(printf '%s\n' "$vc_lines" | grep -c '(MAKE)')"
+	vc_missing=""
+	for f in "$@"; do
+		n="$(printf '%s\n' "$vc_lines" | grep -c -- " $f ")"
+		[ "$n" -eq "$vc_count" ] || vc_missing="$vc_missing $f($n/$vc_count)"
+	done
+	if [ "$vc_count" -ge 1 ] && [ -z "$vc_missing" ]; then
+		ok "$vc_target carries its flags on every sub-make ($vc_count)"
+	else
+		ko "$vc_target carries its flags on every sub-make ($vc_count)" "missing:$vc_missing"
+	fi
+}
+variant_case neutrino-debug DEBUG_BUILD=1
+variant_case neutrino-asan DEBUG_BUILD=1 ENABLE_ASAN=1 ENABLE_UBSAN=1
+variant_case neutrino-tsan DEBUG_BUILD=1 ENABLE_TSAN=1
+variant_case run-gdb-debug DEBUG_BUILD=1
+
 # --- H2/post: a late target extension can reference a later module's var ----
 # Makefile.local is read early (variable overrides); target definitions that
 # depend on a module variable go in Makefile.local.post, read after every
