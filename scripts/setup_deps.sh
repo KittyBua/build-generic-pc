@@ -82,10 +82,16 @@ done
 
 # Packages without which the core build cannot succeed. Missing entries here
 # abort before the build instead of failing deep inside ./configure.
+# libgnutls28-dev (gnutls-devel on dnf) is what the locally built ffmpeg's
+# --enable-gnutls needs (make/third_party/ffmpeg.mk): without a TLS backend
+# that ffmpeg has no https protocol, and with the flag set but the headers
+# missing its configure aborts. It stays in the core list even for
+# FFMPEG_USE_SYSTEM=1, where it merely sits idle: the package lives in every
+# main repository, so nothing is gained by a second conditional list.
 CORE_PACKAGES_APT=(
   build-essential git pkg-config cmake ninja-build nasm automake autoconf libtool
   curl rsync patch xz-utils
-  gettext libssl-dev libcurl4-openssl-dev libjpeg-dev libpng-dev libtiff-dev libglew-dev
+  gettext libssl-dev libgnutls28-dev libcurl4-openssl-dev libjpeg-dev libpng-dev libtiff-dev libglew-dev
   freeglut3-dev libao-dev libmad0-dev libid3tag0-dev libgif-dev libflac-dev
   libreadline-dev liblua5.3-dev lua5.3 libluajit-5.1-dev
   python3 python3-dev python3-venv python3-pip
@@ -140,7 +146,7 @@ SYSTEM_PACKAGES_APT=("${CORE_PACKAGES_APT[@]}" "${OPTIONAL_PACKAGES_APT[@]}")
 CORE_PACKAGES_DNF=(
   gcc gcc-c++ make git pkgconf-pkg-config cmake ninja-build nasm automake autoconf libtool
   curl rsync patch xz diffutils
-  gettext openssl-devel libcurl-devel libjpeg-turbo-devel libpng-devel libtiff-devel
+  gettext openssl-devel gnutls-devel libcurl-devel libjpeg-turbo-devel libpng-devel libtiff-devel
   glew-devel freeglut-devel libao-devel libmad-devel
   libid3tag-devel giflib-devel flac-devel readline-devel lua-devel luajit-devel
   python3 python3-devel python3-virtualenv python3-pip

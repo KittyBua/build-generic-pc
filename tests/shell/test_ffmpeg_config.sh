@@ -16,7 +16,9 @@
 #   * a dry run writes nothing, warm or cold, and neither does `make -q`;
 #   * FFMPEG_CONFIGURE_FLAGS is appended after the built-in line, so a flag
 #     given there has the last word in ffmpeg's configure -- from the command
-#     line, from Makefile.local and from Makefile.local.post alike.
+#     line, from Makefile.local and from Makefile.local.post alike;
+#   * the built-in line enables gnutls, so https works without any local
+#     setting, and `--disable-gnutls` in the user's flags still opts out.
 #
 # The first of these had been broken for as long as the module existed: a flag
 # edit was ignored by every tree that had already been configured, and nothing
@@ -109,6 +111,11 @@ if grep -qx -- '--enable-shared' "$ARGV" 2>/dev/null; then
 else
 	ko "configure receives the built-in line" "argv: $(tr '\n' ' ' < "$ARGV" 2>/dev/null)"
 fi
+if grep -qx -- '--enable-gnutls' "$ARGV" 2>/dev/null; then
+	ok "the built-in line enables gnutls, so https is there by default"
+else
+	ko "the built-in line enables gnutls, so https is there by default" "argv: $(tr '\n' ' ' < "$ARGV" 2>/dev/null)"
+fi
 
 # --- unchanged line: nothing happens ----------------------------------------
 # Identity and mtime both: a `touch` of the matched stamp would keep the
@@ -166,6 +173,19 @@ if [ "$rc" -eq 0 ] && [ "$(last_arg)" = "--enable-version3" ]; then
 	ok "an override from Makefile.local.post reaches the configure line"
 else
 	ko "an override from Makefile.local.post reaches the configure line" "rc=$rc last argument: '$(last_arg)'; $out"
+fi
+
+# --- opting out: the user's --disable-gnutls comes after --enable-gnutls ----
+# ffmpeg's configure applies --enable and --disable in order; the last wins.
+rm -f "$ARGV"
+out="$(run_make "$STAMP" FFMPEG_CONFIGURE_FLAGS=--disable-gnutls 2>&1)"
+rc=$?
+enable_at="$(grep -nx -- '--enable-gnutls' "$ARGV" 2>/dev/null | cut -d: -f1)"
+disable_at="$(grep -nx -- '--disable-gnutls' "$ARGV" 2>/dev/null | cut -d: -f1)"
+if [ "$rc" -eq 0 ] && [ -n "$enable_at" ] && [ -n "$disable_at" ] && [ "$enable_at" -lt "$disable_at" ]; then
+	ok "--disable-gnutls in FFMPEG_CONFIGURE_FLAGS has the last word"
+else
+	ko "--disable-gnutls in FFMPEG_CONFIGURE_FLAGS has the last word" "rc=$rc enable at '$enable_at', disable at '$disable_at'; $out"
 fi
 
 # --- a shell-sensitive flag: recorded verbatim, so no spurious reconfigure --

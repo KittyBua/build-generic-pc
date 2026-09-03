@@ -92,6 +92,8 @@ help:
 	@echo "  deps-ffmpeg-<ver> : ffmpeg <ver> lokal bauen (erzwingt Build, ignoriert Host-Version)"
 	@echo "  deps-ffmpeg5      : ffmpeg 5.1.4 lokal bauen (Alias für deps-ffmpeg-5.1.4)"
 	@echo "                      Bestehende ffmpeg-Installation im Prefix wird vor Neuinstallation entfernt"
+	@echo "                      https via GnuTLS (--enable-gnutls); Abwahl: FFMPEG_CONFIGURE_FLAGS=--disable-gnutls"
+	@echo "                      Geänderte Configure-Zeile => Reconfigure + Rebuild beim nächsten Lauf"
 	@echo "  plugin-install-<name>: Einzelnes Plugin aus plugins/Makefile bauen (siehe list-plugin-targets)"
 	@echo "  list-plugin-targets: Verfügbare Plugin-Namen für plugin-install-<name> anzeigen"
 	@echo ""

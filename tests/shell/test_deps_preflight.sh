@@ -287,6 +287,27 @@ case "$cmp_out" in
 	*) ko "cmp is a required command" "got: $cmp_out" ;;
 esac
 
+# The locally built ffmpeg is configured with --enable-gnutls, and that flag
+# turns a missing gnutls-dev from "no https" into a configure abort. So the
+# package must be a core dep on both package managers, unconditionally: it is
+# needed by the default build, not by an opt-in.
+probe6="$WORK/probe6.sh"
+sed -n '1,/^ensure_log$/p' "$SCRIPT" | sed '$d' > "$probe6"
+cat >> "$probe6" <<'PROBE'
+in_array() { local n="$1"; shift; local x; for x in "$@"; do [ "$x" = "$n" ] && return 0; done; return 1; }
+in_array libgnutls28-dev "${CORE_PACKAGES_APT[@]}" && echo "APT_HAS_GNUTLS" || echo "APT_NO_GNUTLS"
+in_array gnutls-devel    "${CORE_PACKAGES_DNF[@]}" && echo "DNF_HAS_GNUTLS" || echo "DNF_NO_GNUTLS"
+PROBE
+gnutls_out="$(FFMPEG_USE_SYSTEM=0 "$BASH_BIN" "$probe6" 2>&1)"
+case "$gnutls_out" in
+	*APT_HAS_GNUTLS*) ok "libgnutls28-dev is an apt core dep for the local ffmpeg build" ;;
+	*) ko "libgnutls28-dev is an apt core dep for the local ffmpeg build" "got: $gnutls_out" ;;
+esac
+case "$gnutls_out" in
+	*DNF_HAS_GNUTLS*) ok "gnutls-devel is a dnf core dep for the local ffmpeg build" ;;
+	*) ko "gnutls-devel is a dnf core dep for the local ffmpeg build" "got: $gnutls_out" ;;
+esac
+
 # --------------------------------------------------------------- summary
 printf -- '----\n'
 printf '[test-deps-preflight] pass=%s fail=%s\n' "$pass" "$fail"

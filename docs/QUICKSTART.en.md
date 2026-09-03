@@ -137,6 +137,8 @@ When `TOOLCHAIN_GCC_VERSION` is set, the build now actively checks that CC/CXX r
 - Use the host version (faster, but system-dependent): `FFMPEG_USE_SYSTEM=1 make deps` or `FFMPEG_USE_SYSTEM=1 make bootstrap` (builds only if the host version is missing/mismatched).
 - Convenience alias: `make deps-ffmpeg5` → `deps-ffmpeg-5.1.4`.
 - Extra flags for `./configure`: `FFMPEG_CONFIGURE_FLAGS="--enable-gpl --enable-nonfree" make deps-ffmpeg-7.0.2` (e.g. for additional codecs/hwaccels).
+- https: the local build is configured with `--enable-gnutls` (host package `libgnutls28-dev` or `gnutls-devel`). Opt out with `FFMPEG_CONFIGURE_FLAGS=--disable-gnutls`; the user flags come after the built-in line and have the last word in FFmpeg's `configure`.
+- A changed configure invocation (flags, compiler, the calling shell's exported CPPFLAGS/CFLAGS/CXXFLAGS/LDFLAGS/PKG_CONFIG_PATH — so also a switch to `neutrino-debug`/`neutrino-asan`, or a different environment) is detected on the next `make neutrino` or `make deps-ffmpeg` and rebuilds FFmpeg from scratch; libstb-hal and Neutrino are then reconfigured and rebuilt against the new library as well. Deleting `sources/ffmpeg-*/build` is no longer needed for that.
 
 Before installation, any existing FFmpeg in the sysroot (headers/libs/binaries/pkgconfig) is removed so exactly one version stays installed and Neutrino links consistently against it.
 

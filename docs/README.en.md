@@ -60,6 +60,16 @@ in a working `neutrino` binary.
 version — newer, older, or merely patched — is rejected and the local build
 runs anyway, so on most distributions this flag changes nothing.
 
+The local FFmpeg is configured with `--enable-gnutls` so that `https` works —
+streams hand out https segments and keys even behind a plain `http` entry
+point. This needs `libgnutls28-dev` (dnf: `gnutls-devel`) on the host, see
+below. To opt out, set `FFMPEG_CONFIGURE_FLAGS := --disable-gnutls` in
+`Makefile.local` — also when you pick another TLS backend there
+(`--enable-openssl`, `--enable-mbedtls`): FFmpeg's `configure` refuses two
+backends at once; a changed configure line reconfigures and rebuilds on the
+next `make neutrino` (or `make deps-ffmpeg`) by itself (libstb-hal and
+Neutrino then rebuild against the new library as well).
+
 ## Prerequisites
 
 - Linux x86_64 (generic-pc)
@@ -81,8 +91,8 @@ sudo apt-get update
 sudo apt-get install -y \
   build-essential git pkg-config cmake ninja-build nasm automake autoconf libtool \
   curl rsync patch xz-utils \
-  gettext libssl-dev libcurl4-openssl-dev libjpeg-dev libpng-dev libtiff-dev \
-  libglew-dev freeglut3-dev \
+  gettext libssl-dev libgnutls28-dev libcurl4-openssl-dev libjpeg-dev libpng-dev \
+  libtiff-dev libglew-dev freeglut3-dev \
   libao-dev libmad0-dev libid3tag0-dev libgif-dev libflac-dev libreadline-dev \
   liblua5.3-dev lua5.3 libluajit-5.1-dev python3 python3-dev python3-venv python3-pip python3-opencv \
   python3-numpy tesseract-ocr libleptonica-dev xvfb x11-apps fbcat netpbm \
@@ -104,8 +114,8 @@ while building them from source. CI pins fedora:41 for the same reason.
 sudo dnf install -y \
   gcc gcc-c++ make git pkgconf-pkg-config cmake ninja-build nasm automake autoconf libtool \
   curl rsync patch xz \
-  gettext openssl-devel libcurl-devel libjpeg-turbo-devel libpng-devel \
-  libtiff-devel glew-devel freeglut-devel libao-devel libmad-devel \
+  gettext openssl-devel gnutls-devel libcurl-devel libjpeg-turbo-devel \
+  libpng-devel libtiff-devel glew-devel freeglut-devel libao-devel libmad-devel \
   libid3tag-devel giflib-devel flac-devel readline-devel lua-devel luajit-devel python3 \
   python3-devel python3-virtualenv python3-pip opencv opencv-devel tesseract tesseract-devel \
   leptonica-devel xorg-x11-server-Xvfb netpbm-progs dejavu-sans-fonts \

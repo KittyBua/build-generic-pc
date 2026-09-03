@@ -44,6 +44,11 @@ cp -a "${INSTALL_DIR}${NEUTRINO_PREFIX}/." "${WORKDIR}${NEUTRINO_PREFIX}/"
 
 INSTALLED_SIZE=$(du -sk "${WORKDIR}${NEUTRINO_PREFIX}" | cut -f1)
 
+# The locally built libavformat links libgnutls.so.30; the package name split
+# in t64 between releases is what the alternative is for. The rest of this
+# list is a hand-maintained minimum and knows nothing of the other libraries
+# the staged tree needs -- generating it from the packaged ELF files is the
+# real fix.
 cat >"${WORKDIR}/DEBIAN/control" <<EOF
 Package: ${PACKAGE_NAME}
 Version: ${PACKAGE_VERSION}
@@ -53,7 +58,7 @@ Architecture: ${ARCH}
 Maintainer: Neutrino Team <dev@neutrino>
 Description: Neutrino generic-pc build (requires root for device access)
 Installed-Size: ${INSTALLED_SIZE}
-Depends: adduser, libstdc++6, libc6, libgcc-s1
+Depends: adduser, libstdc++6, libc6, libgcc-s1, libgnutls30t64 | libgnutls30
 EOF
 
 mkdir -p "${WORKDIR}/DEBIAN"

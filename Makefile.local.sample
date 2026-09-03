@@ -61,7 +61,10 @@
 #FFMPEG_USE_SYSTEM := 1
 #  Use the host ffmpeg if available and version-matching; default is 0 (always build locally into the sysroot).
 #FFMPEG_CONFIGURE_FLAGS := --enable-nonfree --enable-libx264
-#  Additional flags passed to ffmpeg's ./configure (e.g. to enable nonfree/GPL codecs or custom hwaccels).
+#  Additional flags passed to ffmpeg's ./configure after the built-in line (e.g. to enable nonfree/GPL
+#  codecs or custom hwaccels). The built-in line enables gnutls for https; `--disable-gnutls` here opts
+#  out -- add it whenever you pick another TLS backend (--enable-openssl, --enable-mbedtls), ffmpeg's
+#  configure refuses two at once. A changed value reconfigures and rebuilds ffmpeg on the next make.
 
 #NEUTRINO_GDB_AUTORUN := 0
 #NEUTRINO_GDB_COMMANDS := break main;bt

@@ -64,6 +64,13 @@ $(FFMPEG_UNPACK_STAMP): $(FFMPEG_ARCHIVE)
 # The configure line as it is run. Recursive on purpose: the recipe always
 # expanded FFMPEG_CONFIGURE_FLAGS at run time, and Makefile.local.post is read
 # after this module, so an override made there has to keep working.
+#
+# gnutls is part of the built-in line rather than a default of
+# FFMPEG_CONFIGURE_FLAGS that any override would silently drop: without a TLS
+# backend this ffmpeg has no https protocol at all, and streams hand out https
+# segment and key URLs even behind a plain-http entry point. FFmpeg's configure
+# applies --enable/--disable in order, so a `--disable-gnutls` in
+# FFMPEG_CONFIGURE_FLAGS still opts out.
 FFMPEG_CONFIGURE_ARGS = \
 	--prefix=$(FFMPEG_PREFIX) \
 	--enable-shared \
@@ -71,6 +78,7 @@ FFMPEG_CONFIGURE_ARGS = \
 	--disable-debug \
 	--disable-doc \
 	--enable-pic \
+	--enable-gnutls \
 	$(FFMPEG_CONFIGURE_FLAGS)
 
 # What the stamp records: the whole invocation -- the compiler and the
