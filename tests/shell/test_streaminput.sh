@@ -69,12 +69,12 @@ if [ ! -f "$SRC" ] || [ ! -f "$INC/streaminput.h" ]; then
 fi
 
 # CC arrives from the environment under "make test-shell", where it can be a
-# multi-word command such as "ccache gcc" and, with no ccache wrapper
-# configured, carries a leading space (make/toolchain.mk:44). Testing the raw
-# value with command -v fails in both cases, and this file skipped itself
-# without ever compiling anything -- the same trap test_appimage_bridge.sh
-# documents. Whitespace runs are squeezed too: a doubled space or a tab
-# would make the word splits below come out empty. When the first word is
+# multi-word command such as "ccache gcc". Testing the raw value with
+# command -v fails on that, and this file skipped itself without ever
+# compiling anything -- the same trap test_appimage_bridge.sh documents.
+# Whitespace runs are squeezed too: a doubled space or a tab would make the
+# word splits below come out empty, and until the guard above was fixed a
+# host without ccache handed out a leading space. When the first word is
 # the ccache wrapper -- toolchain.mk stores it as an absolute path -- the
 # compiler to probe is the word behind it: probing the wrapper would only
 # prove that ccache exists. A missing C compiler is failed loudly rather

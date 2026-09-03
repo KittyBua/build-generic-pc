@@ -13,7 +13,10 @@ endif
 CCACHE ?= $(shell command -v ccache 2>/dev/null)
 CCACHE_BASE ?= $(CACHE_DIR)/ccache
 CCACHE_ID := $(if $(filter system,$(TOOLCHAIN_GCC_VERSION)),system,$(TOOLCHAIN_GCC_VERSION))
-ifdef CCACHE
+# Not `ifdef`: that tests the unexpanded text, and `$(shell command -v ...)`
+# is never empty as text -- so the wrapper branch was taken on every host
+# without ccache too, and CC became " gcc" with a leading space.
+ifneq ($(strip $(CCACHE)),)
 CCACHE_DIR ?= $(CCACHE_BASE)/$(HOST_ARCH)/gcc-$(CCACHE_ID)
 CCACHE_TEMPDIR ?= $(CCACHE_BASE)/tmp
 endif
@@ -39,7 +42,7 @@ ifeq ($(origin CXX),default)
 endif
 
 # Transparently wrap compilers with ccache (if available) and steer cache into a per-arch/per-gcc directory.
-ifdef CCACHE
+ifneq ($(strip $(CCACHE)),)
   ifeq ($(findstring ccache,$(CC)),)
     CC := $(CCACHE) $(CC)
   endif

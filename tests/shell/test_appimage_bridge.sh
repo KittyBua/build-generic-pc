@@ -58,9 +58,9 @@ ACSRC
 # The stand-in has to be a real ELF with a RUNPATH: the packaging step rewrites
 # that RUNPATH, and a shell script would not exercise it.
 # CC arrives from the environment under "make test-shell", where it can be a
-# multi-word command such as "ccache gcc" and, when no ccache wrapper is
-# configured, carries a leading space. Testing the raw value with command -v
-# fails in both cases, which silently skipped this whole file.
+# multi-word command such as "ccache gcc" -- and, until the guard above was
+# fixed, a leading space on a host without ccache. Testing the raw value with
+# command -v fails on either, which silently skipped this whole file.
 CC="$(printf '%s' "${CC:-cc}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 [ -n "$CC" ] || CC=cc
 CC_BIN="${CC%% *}"

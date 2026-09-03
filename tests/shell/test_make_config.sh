@@ -276,6 +276,23 @@ case "$variant_path" in
 		ko "a variant sub-make puts its own runtime bin first and scripts only once" "got '$variant_path'" ;;
 esac
 
+# --- toolchain: ccache wraps the compiler only when it exists ---------------
+# `ifdef` tests the unexpanded text, and `$(shell command -v ccache)` is never
+# empty as text, so every host without ccache got CC=" gcc" with a leading
+# space. A value that expands to nothing stands in for that host here.
+cc_none="$( cd "$WORK" && run_make -s -f probe.mk w164-probe 'CCACHE=$(shell true)' 2>/dev/null | sed -n 's/^CC=//p' )"
+cc_some="$( cd "$WORK" && run_make -s -f probe.mk w164-probe CCACHE=/usr/bin/env 2>/dev/null | sed -n 's/^CC=//p' )"
+if [ "$cc_none" = "gcc" ]; then
+	ok "without ccache CC is a bare gcc"
+else
+	ko "without ccache CC is a bare gcc" "got '$cc_none'"
+fi
+if [ "$cc_some" = "/usr/bin/env gcc" ]; then
+	ok "with ccache CC is wrapped"
+else
+	ko "with ccache CC is wrapped" "got '$cc_some'"
+fi
+
 # --- H2/post: a late target extension can reference a later module's var ----
 # Makefile.local is read early (variable overrides); target definitions that
 # depend on a module variable go in Makefile.local.post, read after every
