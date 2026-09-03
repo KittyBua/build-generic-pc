@@ -235,6 +235,43 @@ else
 		"rc=$rc missing:$missing"
 fi
 
+# The first line is the tool's own line, not neutrino's: a SemVer triple,
+# then the neutrino version the binary was cut from in parentheses. That
+# second half is pinned to the calendar shape neutrino's own version-line
+# workflow enforces (a four-digit year first): a "1.0.0" there is the tool
+# version pasted twice, an "unknown" is a lost config.h -- both are green
+# on a looser pattern.
+first="$(printf '%s\n' "$ver" | sed -n '1p')"
+if printf '%s\n' "$first" | grep -qE '^streamprobe [0-9]+\.[0-9]+\.[0-9]+ \(Tuxbox-Neutrino 20[0-9][0-9]\.[0-9]+\.[0-9]+\)$'; then
+	ok "--version leads with the tool's own SemVer line and the neutrino version"
+else
+	ko "--version leads with the tool's own SemVer line and the neutrino version" "got '$first'"
+fi
+
+# Drift guard: the header the workflow rewrites has to be what the binary
+# says. A Yocto devtool workspace does not rebuild the tool on a header-only
+# change, so this is the one place where the two are compared. It compares
+# against THIS tree's header, so a STREAMPROBE_BIN built from another tree
+# fails here for a legitimate reason.
+# Both halves of that line feed the JSON case below: the JSON has to say
+# what the text says, and the text has to say what the header says.
+got_ver="$(printf '%s\n' "$first" | sed -E 's/^streamprobe ([^ ]+) .*/\1/')"
+neu_ver="$(printf '%s\n' "$first" | sed -E 's/^streamprobe [^ ]+ \([^ ]+ ([^ )]+)\)$/\1/')"
+VERSION_HDR="$ROOT_DIR/sources/neutrino/src/tools/streamprobe_version.h"
+if [ -r "$VERSION_HDR" ]; then
+	want_ver="$(awk '$1 == "#define" && $2 ~ /^STREAMPROBE_VERSION_(MAJOR|MINOR|PATCH)$/ { v[$2] = $3 }
+		END { print v["STREAMPROBE_VERSION_MAJOR"] "." v["STREAMPROBE_VERSION_MINOR"] "." v["STREAMPROBE_VERSION_PATCH"] }' \
+		"$VERSION_HDR")"
+	if [ "$got_ver" = "$want_ver" ] && [ -n "$got_ver" ]; then
+		ok "the binary reports the version streamprobe_version.h declares"
+	else
+		ko "the binary reports the version streamprobe_version.h declares" \
+			"header says '$want_ver', binary says '$got_ver'"
+	fi
+else
+	sk "the binary reports the version streamprobe_version.h declares" "no neutrino source at $VERSION_HDR"
+fi
+
 # --- usage errors -----------------------------------------------------------
 usage_case() { # $1 = description, rest = argv
 	uc_desc="$1"
@@ -256,6 +293,24 @@ usage_case "--repeat without a value is a usage error" --repeat
 usage_case "an unknown profile is a usage error" --profile live "$WAV"
 usage_case "two urls are a usage error" "$WAV" "$WAV"
 usage_case "an empty url is a usage error" ""
+
+# Called with nothing at all, the tool says what it is first -- on stderr,
+# which is why the usage case above still holds: stdout empty, exit 2. Each
+# case runs its own invocation rather than reading what the last one left.
+run >/dev/null || true
+if [ "$(sed -n '1p' "$WORK/stderr")" = "$first" ]; then
+	ok "no argument prints the --version line first, on stderr"
+else
+	ko "no argument prints the --version line first, on stderr" "stderr starts '$(sed -n '1p' "$WORK/stderr")', --version says '$first'"
+fi
+# ...and only with nothing at all: one argument that is itself a usage
+# error (a value-less --repeat) starts with the error, not the banner.
+run --repeat >/dev/null || true
+if sed -n '1p' "$WORK/stderr" | grep -qE '^streamprobe: '; then
+	ok "a single-argument usage error does not lead with the version line"
+else
+	ko "a single-argument usage error does not lead with the version line" "stderr starts '$(sed -n '1p' "$WORK/stderr")'"
+fi
 
 # An error message is output like any other: a url on the command line can
 # carry a token, so it must not be echoed back.
@@ -455,11 +510,12 @@ else
 	# contradicts the iterations all pass a substring check.
 	run --json --repeat 3 --open-time 1 "$WAV" > "$WORK/ok.json"
 	rc=$?
-	if "$PY" - "$WORK/ok.json" "$rc" 2>"$WORK/pyerr" <<'PYEOF'
-import json, sys
+	if "$PY" - "$WORK/ok.json" "$rc" "$got_ver" "$neu_ver" 2>"$WORK/pyerr" <<'PYEOF'
+import json, re, sys
 
 doc = json.load(open(sys.argv[1]))
 rc = int(sys.argv[2])
+tool_ver, neutrino_ver = sys.argv[3], sys.argv[4]
 problems = []
 
 def want(cond, msg):
@@ -467,7 +523,13 @@ def want(cond, msg):
 		problems.append(msg)
 
 want(doc["tool"] == "streamprobe", "tool name")
-want(isinstance(doc["tool_version"], str), "tool_version type")
+# Equality with what --version printed, not a shape check: neutrino's
+# calendar version is also three dot-separated numbers, so a regex would
+# wave through the two fields swapped -- or tool_version quietly reverting
+# to PACKAGE_VERSION, which is the very thing this line exists to catch.
+want(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", doc["tool_version"]) is not None, "tool_version is a SemVer triple")
+want(doc["tool_version"] == tool_ver, "tool_version agrees with --version")
+want(doc["neutrino_version"] == neutrino_ver, "neutrino_version agrees with --version")
 for lib in ("avformat", "avcodec", "avutil"):
 	want(isinstance(doc["libav"][lib]["runtime"], str), lib + " runtime")
 	want(isinstance(doc["libav"][lib]["build"], str), lib + " build")
