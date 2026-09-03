@@ -19,8 +19,6 @@ FFMPEG_NEEDS_BUILD := $(shell \
 	else echo yes; fi)
 
 ifeq ($(FFMPEG_NEEDS_BUILD),yes)
-THIRD_PARTY_HOSTDEPS += $(FFMPEG_INSTALL_STAMP)
-THIRD_PARTY_HOSTDEPS_TARGETS += ffmpeg
 FFMPEG_ARCHIVE := $(ARCHIVE_DIR)/ffmpeg-$(FFMPEG_VERSION).tar.gz
 FFMPEG_SRC_DIR := $(SOURCES_DIR)/ffmpeg-$(FFMPEG_VERSION)
 FFMPEG_BUILD_DIR := $(FFMPEG_SRC_DIR)/build
@@ -38,6 +36,15 @@ FFMPEG_INSTALL_STAMP := $(FFMPEG_BUILD_DIR)/.installed
 # changed one would still configure the same directory at the same time,
 # as the same invocation already builds the neutrino tree twice over.
 FFMPEG_CONFIGURE_NEW := $(FFMPEG_SRC_DIR)/.configured.new.$(shell echo $$PPID)
+# Registered after the stamp exists: THIRD_PARTY_HOSTDEPS is a simple
+# variable, so `+=` expands its right-hand side on the spot. Registered
+# above the definition, as it used to be, the list stayed empty in a
+# top-level make: `hostdeps` built nothing, and the libstb-hal and neutrino
+# configure stamps -- which list this through NEUTRINO_OPTIONAL_DEPS --
+# never learned that ffmpeg had been reinstalled under them. Only a
+# sub-make (bootstrap's `$(MAKE) neutrino`) saw a value, and that one came
+# from the exported environment of its parent, whatever it happened to be.
+THIRD_PARTY_HOSTDEPS += $(FFMPEG_INSTALL_STAMP)
 
 .PHONY: deps-ffmpeg ffmpeg
 deps-ffmpeg: $(FFMPEG_INSTALL_STAMP)

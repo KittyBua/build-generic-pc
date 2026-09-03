@@ -19,6 +19,8 @@
 #     line, from Makefile.local and from Makefile.local.post alike;
 #   * the built-in line enables gnutls, so https works without any local
 #     setting, and `--disable-gnutls` in the user's flags still opts out.
+#   * the install stamp is registered as a host dep, so `hostdeps` builds
+#     ffmpeg and a reinstalled ffmpeg reaches the consumers' configure stamps.
 #
 # The first of these had been broken for as long as the module existed: a flag
 # edit was ignored by every tree that had already been configured, and nothing
@@ -409,6 +411,46 @@ if [ "$rc" -eq 0 ] && [ ! -e "$BUILD" ] && [ -z "$(scratch_left)" ]; then
 else
 	ko "a dry run on a cold tree neither fails nor creates anything" "rc=$rc build dir=$([ -e "$BUILD" ] && echo created || echo absent) scratch='$(scratch_left)'; $out"
 fi
+
+# --- the install stamp reaches hostdeps and the consumers -------------------
+# THIRD_PARTY_HOSTDEPS is a simple variable; registering the stamp above its
+# own definition left the list empty for as long as the module existed, so
+# `make hostdeps` built nothing and libstb-hal/neutrino never reconfigured
+# after an ffmpeg reinstall. Read through a probe target, like
+# test_make_config.sh does.
+cat > "$WORK/probe.mk" <<PROBE
+include make/main.mk
+w231-probe:
+${TAB}@printf 'HOSTDEPS=%s\n' '\$(THIRD_PARTY_HOSTDEPS)'
+${TAB}@printf 'OPTIONAL_DEPS=%s\n' '\$(NEUTRINO_OPTIONAL_DEPS)'
+PROBE
+probe_out="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" LC_ALL=C \
+	make -C "$WORK" -f probe.mk TOOLCHAIN_GCC_VERSION=system w231-probe 2>/dev/null)"
+case "$probe_out" in
+	*"HOSTDEPS=$BUILD/.installed"*)
+		ok "the install stamp is registered as a host dep" ;;
+	*)
+		ko "the install stamp is registered as a host dep" "$probe_out" ;;
+esac
+case "$probe_out" in
+	*"OPTIONAL_DEPS=$BUILD/.installed"*)
+		ok "a reinstalled ffmpeg reaches the consumers' configure stamps" ;;
+	*)
+		ko "a reinstalled ffmpeg reaches the consumers' configure stamps" "$probe_out" ;;
+esac
+# The old registration did see a value inside a sub-make -- the one its
+# parent had exported, whatever that was. Registered after the definition,
+# the module's own path wins over anything in the environment.
+env_out="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" LC_ALL=C \
+	FFMPEG_INSTALL_STAMP=/from/parent/.installed \
+	make -C "$WORK" -f probe.mk TOOLCHAIN_GCC_VERSION=system w231-probe 2>/dev/null)"
+case "$env_out" in
+	*"OPTIONAL_DEPS=$BUILD/.installed"*)
+		ok "the registration does not depend on an exported parent value" ;;
+	*)
+		ko "the registration does not depend on an exported parent value" "$env_out" ;;
+esac
+rm -f "$WORK/probe.mk"
 
 printf '[test-ffmpeg-config] pass=%d fail=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
