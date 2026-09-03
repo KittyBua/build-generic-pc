@@ -47,6 +47,10 @@ ${TAB}@printf 'DEFAULT_GOAL=%s\n' '\$(.DEFAULT_GOAL)'
 ${TAB}@printf 'CC=%s\n' '\$(CC)'
 ${TAB}@printf 'CXX=%s\n' '\$(CXX)'
 ${TAB}@printf 'PKG_CONFIG_PATH=%s\n' '\$(PKG_CONFIG_PATH)'
+${TAB}@printf 'CPPFLAGS=%s\n' '\$(CPPFLAGS)'
+${TAB}@printf 'LDFLAGS=%s\n' '\$(LDFLAGS)'
+${TAB}@printf 'LD_LIBRARY_PATH=%s\n' '\$(LD_LIBRARY_PATH)'
+${TAB}@printf 'PATH=%s\n' '\$(PATH)'
 ${TAB}@printf 'LIBSTB_HAL_DIR=%s\n' '\$(LIBSTB_HAL_DIR)'
 ${TAB}@printf 'N_PLUGIN_DIR=%s\n' '\$(N_PLUGIN_DIR)'
 ${TAB}@printf 'N_LUAPLUGIN_DIR=%s\n' '\$(N_LUAPLUGIN_DIR)'
@@ -226,6 +230,51 @@ if [ "$py_optout" = "python3" ]; then
 else
 	ko "an explicit PYTHON := python3 opts out of the venv" "got '$py_optout'"
 fi
+
+# --- env-derive: a sub-make derives the same paths as the top level --------
+# The sysroot search paths and flags are prepended to their own exported
+# value; a sub-make (bootstrap's $(MAKE) neutrino, the variants) re-reads the
+# module with the parent's result in its environment and used to prepend a
+# second time. The ffmpeg configure record made that visible: level 1 saw a
+# different invocation than level 0.
+cat > "$WORK/submake.mk" <<EOF
+include make/main.mk
+w231-submake:
+${TAB}@\$(MAKE) -s -f probe.mk w164-probe
+EOF
+rm -f "$WORK/Makefile.local"
+derived='^(PKG_CONFIG_PATH|CPPFLAGS|LDFLAGS|LD_LIBRARY_PATH|PATH)='
+top="$( cd "$WORK" && run_make -s -f probe.mk w164-probe 2>/dev/null | grep -E "$derived" )"
+sub="$( cd "$WORK" && run_make -s -f submake.mk w231-submake 2>/dev/null | grep -E "$derived" )"
+rm -f "$WORK/submake.mk"
+if [ -n "$top" ] && [ "$top" = "$sub" ]; then
+	ok "a sub-make derives the same sysroot paths as the top level"
+else
+	ko "a sub-make derives the same sysroot paths as the top level" "top: $top | sub: $sub"
+fi
+
+# A variant sub-make (neutrino-debug and friends) changes the runtime prefix
+# but not the scripts directory; its own bin has to land in front of PATH
+# even though scripts is already there, or an asan run would pick up the
+# release runtime's binaries.
+cat > "$WORK/submake.mk" <<EOF
+include make/main.mk
+w231-variant:
+${TAB}@\$(MAKE) -s -f probe.mk NEUTRINO_RUNTIME_PREFIX=$WORK/root-variant w164-probe
+EOF
+variant_path="$( cd "$WORK" && run_make -s -f submake.mk w231-variant 2>/dev/null | sed -n 's/^PATH=//p' )"
+rm -f "$WORK/submake.mk"
+scripts_count="$(printf '%s\n' "$variant_path" | tr ':' '\n' | grep -c -x "$WORK/scripts")"
+case "$variant_path" in
+	"$WORK/root-variant/bin:"*)
+		if [ "$scripts_count" -eq 1 ]; then
+			ok "a variant sub-make puts its own runtime bin first and scripts only once"
+		else
+			ko "a variant sub-make puts its own runtime bin first and scripts only once" "scripts x$scripts_count in '$variant_path'"
+		fi ;;
+	*)
+		ko "a variant sub-make puts its own runtime bin first and scripts only once" "got '$variant_path'" ;;
+esac
 
 # --- H2/post: a late target extension can reference a later module's var ----
 # Makefile.local is read early (variable overrides); target definitions that

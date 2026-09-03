@@ -6,9 +6,31 @@
 # included before Makefile.local so a dependent override there can still
 # reference those defaults.
 
-PKG_CONFIG_PATH := $(NEUTRINO_INSTALL_DIR)$(NEUTRINO_PREFIX)/lib/pkgconfig$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))
+# Every path here is prepended to its own previous value, and every one of
+# them is exported. A sub-make ($(MAKE) neutrino from bootstrap, the debug and
+# sanitizer variants, deps-ffmpeg-<ver>) therefore reads this file with the
+# parent's result already in its environment, and used to prepend a second
+# time: two -I and -L for the sysroot, the pkgconfig directory twice, the
+# runtime bin directory twice in PATH. Harmless to the compiler, but not to
+# anything that compares the values -- the ffmpeg configure stamp records
+# them, and a level-1 make saw a different invocation than a level-0 one.
+# So each entry goes in only when it is not there yet.
+NEUTRINO_SYSROOT_PKGCONFIG := $(NEUTRINO_INSTALL_DIR)$(NEUTRINO_PREFIX)/lib/pkgconfig
+ifeq ($(filter $(NEUTRINO_SYSROOT_PKGCONFIG),$(subst :, ,$(PKG_CONFIG_PATH))),)
+PKG_CONFIG_PATH := $(NEUTRINO_SYSROOT_PKGCONFIG)$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))
+endif
+ifeq ($(filter $(NEUTRINO_RUNTIME_PREFIX)/lib,$(subst :, ,$(LD_LIBRARY_PATH))),)
 LD_LIBRARY_PATH := $(NEUTRINO_RUNTIME_PREFIX)/lib$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
-PATH := $(NEUTRINO_RUNTIME_PREFIX)/bin:$(ROOT_DIR)/scripts:$(PATH)
+endif
+# Two entries, two guards: the runtime prefix differs per variant, the
+# scripts directory does not, and a variant sub-make needs its own bin in
+# front even though scripts is already there.
+ifeq ($(filter $(ROOT_DIR)/scripts,$(subst :, ,$(PATH))),)
+PATH := $(ROOT_DIR)/scripts:$(PATH)
+endif
+ifeq ($(filter $(NEUTRINO_RUNTIME_PREFIX)/bin,$(subst :, ,$(PATH))),)
+PATH := $(NEUTRINO_RUNTIME_PREFIX)/bin:$(PATH)
+endif
 
 # Resolve the Python interpreter and pip. Prefer the project venv, but only when
 # the user has not chosen one. `$(origin PYTHON)` is 'undefined' unless PYTHON
@@ -30,10 +52,17 @@ PIP := pip3
 endif
 endif
 
+# Same rule as for the search paths above: once, not once per make level.
 CPPFLAGS ?=
-CPPFLAGS := -I$(NEUTRINO_INSTALL_DIR)$(NEUTRINO_PREFIX)/include $(CPPFLAGS)
+NEUTRINO_SYSROOT_CPPFLAG := -I$(NEUTRINO_INSTALL_DIR)$(NEUTRINO_PREFIX)/include
+ifeq ($(filter $(NEUTRINO_SYSROOT_CPPFLAG),$(CPPFLAGS)),)
+CPPFLAGS := $(NEUTRINO_SYSROOT_CPPFLAG) $(CPPFLAGS)
+endif
 LDFLAGS ?=
-LDFLAGS := -L$(NEUTRINO_INSTALL_DIR)$(NEUTRINO_PREFIX)/lib $(LDFLAGS)
+NEUTRINO_SYSROOT_LDFLAG := -L$(NEUTRINO_INSTALL_DIR)$(NEUTRINO_PREFIX)/lib
+ifeq ($(filter $(NEUTRINO_SYSROOT_LDFLAG),$(LDFLAGS)),)
+LDFLAGS := $(NEUTRINO_SYSROOT_LDFLAG) $(LDFLAGS)
+endif
 
 export ROOT_DIR SOURCES_DIR BUILD_DIR OUTPUT_DIR CACHE_DIR LOG_DIR VENV_DIR ARCHIVE_DIR
 export NEUTRINO_GIT_URL NEUTRINO_BRANCH NEUTRINO_SRC_DIR NEUTRINO_BUILD_DIR NEUTRINO_INSTALL_DIR NEUTRINO_PREFIX
