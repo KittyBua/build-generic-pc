@@ -13,6 +13,10 @@ PLUGIN_SCRIPTS_LUA_GIT_URL ?= https://github.com/tuxbox-neutrino/plugin-scripts-
 PLUGIN_SCRIPTS_LUA_GIT_REF ?=
 LEGACY_PLUGIN_SRC := $(PLUGIN_SCRIPTS_LUA_SRC)/plugins/neutrino-mediathek
 LEGACY_LUA_SRC := $(PLUGIN_SCRIPTS_LUA_SRC)/share/lua
+# The WebTV scripts live in the same repository today. Overridable on its
+# own so that a future dedicated repository is a one-line change here; the
+# fetch prerequisite then drops out by itself.
+WEBTV_SRC ?= $(PLUGIN_SCRIPTS_LUA_SRC)/plugins/webtv
 NEUTRINO_MEDIATHEK_GIT_URL ?= https://github.com/tuxbox-neutrino/plugin-lua-neutrino-mediathek.git
 NEUTRINO_MEDIATHEK_GIT_REF ?=
 
@@ -63,6 +67,7 @@ INSTALL_PREFIX ?= $(DESTDIR)$(PREFIX)
 PLUGIN_SHARE_DIR := $(INSTALL_PREFIX)/share/tuxbox/neutrino/plugins
 LUA_PLUGIN_DIR := $(INSTALL_PREFIX)/share/tuxbox/neutrino/luaplugins
 LUA_HELPER_DEST := $(INSTALL_PREFIX)/share/lua
+WEBTV_DEST := $(INSTALL_PREFIX)/share/tuxbox/neutrino/webtv
 RUNTIME_ROOT_FALLBACK := $(ROOT_DIR)/root
 
 # The build delegates building and installing to each plugin repository, which
@@ -84,14 +89,17 @@ define require_plugin_contract
 	fi
 endef
 
-.PHONY: install clean neutrino-mediathek-install neutrino-mediathek-lua-helpers logoupdater-install fritzinfo-install fritzcall-install tuxwetter-install
+.PHONY: install clean neutrino-mediathek-install neutrino-mediathek-lua-helpers logoupdater-install webtv-install fritzinfo-install fritzcall-install tuxwetter-install
 
 # Every plugin the aggregate attempts, in a deterministic order.
-PLUGINS_ALL ?= neutrino-mediathek logoupdater fritzinfo fritzcall tuxwetter
+PLUGINS_ALL ?= neutrino-mediathek logoupdater webtv fritzinfo fritzcall tuxwetter
 
 # Only a failure of these makes `make plugins` fail. The others are reported but
 # do not deny the user the plugins that did build. fritzinfo stays optional: it
 # is a box-only plugin that is deliberately skipped on the generic PC build.
+# webtv stays optional as well: it is content without a build, useful for
+# exercising the WebTV scripts here, and its absence must not fail a build
+# that produced every plugin the user actually needs.
 PLUGINS_REQUIRED ?= neutrino-mediathek logoupdater fritzcall tuxwetter
 
 # Driven by a shell loop on purpose: the previous plain prerequisite list ran
@@ -275,6 +283,29 @@ neutrino-mediathek-lua-helpers: $(HELPERS_FETCH_DEP)
 		mkdir -p "$$compat_dst" || exit 1; \
 		rsync -a --no-owner --no-group --ignore-existing "$$compat_src/" "$$compat_dst/" || exit 1; \
 	fi
+
+# The WebTV scripts (zdfsport, sportschau, yt_live, ...) are plain content: the
+# repository ships no Makefile for them, so the plugin contract above does not
+# apply. The box installs plugins/webtv/* flat into WEBTVDIR and so does this.
+# Every one of these scripts needs json.lua at runtime, hence the helpers.
+# No positive *.lua/*.xml filter on purpose: Neutrino also scans .m3u and *tv
+# lists, and the box copies the directory as a whole. Only subdirectories -- the
+# install is flat -- and repository furniture are left out.
+WEBTV_FETCH_DEP := $(if $(filter $(PLUGIN_SCRIPTS_LUA_SRC)/plugins/webtv,$(WEBTV_SRC)),plugin-scripts-lua-fetch,)
+webtv-install: $(WEBTV_FETCH_DEP) neutrino-mediathek-lua-helpers
+	@src="$(WEBTV_SRC)"; \
+	if [ ! -d "$$src" ]; then \
+		echo "[plugins] ERROR: WebTV scripts not found at $$src."; \
+		echo "[plugins]        Provide them with:"; \
+		echo "[plugins]            make plugins WEBTV_SRC=<dir holding the *.lua/*.xml>"; \
+		exit 1; \
+	fi; \
+	echo "[plugins] Installing WebTV scripts from $$src into $(WEBTV_DEST)"; \
+	mkdir -p "$(WEBTV_DEST)" || exit 1; \
+	rsync -a --no-owner --no-group \
+		--exclude='*/' --exclude='.git*' --exclude='Makefile*' --exclude='README*' \
+		"$$src/" "$(WEBTV_DEST)/" || exit 1; \
+	echo "[plugins] $$(ls -1 "$(WEBTV_DEST)" | wc -l) WebTV files staged"
 
 logoupdater-install:
 	@src="$(LOGOUPDATER_SRC)"; \
