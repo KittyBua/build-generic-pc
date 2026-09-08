@@ -132,6 +132,12 @@
 #TUXWETTER_GIT_REF := main
 #  Quelle für das Tuxwetter-Plugin (Auto-Clone nach plugins/tuxwetter). Ref ist optional.
 #
+#WEBTV_SRC := $(ROOT_DIR)/sources/plugin-scripts-lua/plugins/webtv
+#  Verzeichnis mit den WebTV-Skripten und -Listen. Standardmäßig kommen sie aus
+#  plugin-scripts-lua, das bei Bedarf geklont wird. Zeigt die Variable woanders hin,
+#  wird nichts geklont — praktisch für einen eigenen Checkout oder ein künftiges
+#  eigenes WebTV-Repository.
+#
 #NEUTRINO_WEB_PORT := 31344
 #  Port des yWeb-Interfaces, der beim erstmaligen Erzeugen von `root/usr/var/tuxbox/config/nhttpd.conf`
 #  durch `make runtime-sync` gesetzt wird. Bestehende Werte werden nicht überschrieben.

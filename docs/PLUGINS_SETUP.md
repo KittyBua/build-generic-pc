@@ -27,6 +27,7 @@ make plugin-install-<name>    # ein einzelnes Plugin
 | --- | --- | --- |
 | `neutrino-mediathek` | `tuxbox-neutrino/plugin-lua-neutrino-mediathek` | wird gebaut |
 | `logoupdater` | `tuxbox-neutrino/plugin-lua-logoupdater` | wird gebaut |
+| `webtv` | `tuxbox-neutrino/plugin-scripts-lua`, Verzeichnis `plugins/webtv` | wird kopiert, kein Build |
 | `FritzInfoMonitor` | — | auf dem PC bewusst übersprungen (braucht Framebuffer- und RC-Gerät der Box) |
 | `FritzCallMonitor` | `tuxbox-neutrino/FritzCallMonitor` | wird gebaut |
 | `tuxwetter` | `tuxbox-neutrino/plugin-tuxwetter` | wird gebaut |
@@ -39,7 +40,9 @@ mit einem Fehlerstatus enden:
 
 Standardmäßig sind `neutrino-mediathek`, `logoupdater`, `fritzcall` und
 `tuxwetter` Pflicht; `fritzinfo` ist optional (box-only, auf dem PC bewusst
-übersprungen). Die Liste lässt sich überschreiben:
+übersprungen) und `webtv` ebenfalls — es sind reine Skripte ohne Build, die
+zum Testen da sind und einen sonst vollständigen Lauf nicht scheitern lassen
+sollen. Die Liste lässt sich überschreiben:
 
 ```make
 # Makefile.local
@@ -75,6 +78,7 @@ Maßgeblich sind — mit `tuxbox/`-Segment:
 ```
 $(DESTDIR)$(PREFIX)/share/tuxbox/neutrino/plugins
 $(DESTDIR)$(PREFIX)/share/tuxbox/neutrino/luaplugins
+$(DESTDIR)$(PREFIX)/share/tuxbox/neutrino/webtv
 $(DESTDIR)$(PREFIX)/lib/tuxbox/neutrino/plugins
 ```
 
@@ -94,6 +98,7 @@ damit für `make run` sichtbar.
 | `NEUTRINO_MEDIATHEK_SRC` | `./sources/neutrino-mediathek` | vorhandene Quelle statt Clone verwenden |
 | `PLUGIN_SCRIPTS_LUA_GIT_URL` / `_GIT_REF` | öffentliche URL / leer | Quelle der gemeinsamen Lua-Helfer (json, feedparser, n_gui, n_helpers) |
 | `NEUTRINO_LUA_HELPERS_SRC` | `./sources/plugin-scripts-lua/share/lua` | vorhandenes Helfer-Verzeichnis (mit `5.x/`) statt Clone verwenden |
+| `WEBTV_SRC` | `./sources/plugin-scripts-lua/plugins/webtv` | Verzeichnis mit den WebTV-Skripten und -Listen |
 
 Aufräumen:
 
@@ -102,6 +107,32 @@ make list-cleanable-plugins
 make clean-plugin-<name>
 make clean-plugins
 ```
+
+## WebTV auf dem PC testen
+
+Die WebTV-Gruppe (`zdfsport`, `sportschau`, `yt_live`, `plutotv_us` und der
+gemeinsame Helfer `best_bitrate_m3u8`) besteht aus Lua-Skripten und XML-Listen.
+Sie werden flach nach `share/tuxbox/neutrino/webtv` kopiert — genau dorthin, wo
+sie auch auf der Box liegen.
+
+```bash
+make plugin-install-webtv     # oder make plugins
+make run
+```
+
+Neutrino liest beim Start beide WebTV-Verzeichnisse: das gerade befüllte
+`root/usr/share/tuxbox/neutrino/webtv` und daneben
+`root/usr/var/tuxbox/neutrino/webtv`. Aus jeder `.xml` wird ein Bouquet, die
+`script="..."`-Angabe darin verweist auf das `.lua` im selben Verzeichnis.
+**Eigene Listen gehören in den `var`-Zweig**: dort bleiben sie liegen, während
+`make clean-plugin-webtv` nur den kopierten Paketstand entfernt.
+
+Was dabei geprüft werden kann, ohne eine Box anzufassen: ob die Bouquets
+erscheinen (`http://localhost:31344/control/getbouquets`), ob ein Skript beim
+Umschalten überhaupt eine URL liefert (im Log `start request accepted` gefolgt
+von `resolved stream`) und ob seine Menüs und Meldungen richtig aussehen.
+Lua ist hier LuaJIT, also Lua 5.1; `json.lua` und die übrigen Helfer stehen
+über `LUA_PATH` bereit, `DIR.CONFIGDIR` zeigt auf `root/usr/var/tuxbox/config`.
 
 ## Einen anderen Plugin-Branch bauen
 
