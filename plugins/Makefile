@@ -204,14 +204,34 @@ neutrino-mediathek-install: neutrino-mediathek-lua-helpers
 		done; \
 	done
 
+# The repository behind the Lua helper libraries -- and, upstream, the WebTV
+# lists. Kept as a target of its own so that exactly one recipe ever clones it:
+# two recipes doing it themselves race under the auto-injected -j and the
+# loser dies on a non-empty target directory. A directory that is already
+# there -- a checkout, or a symlink to one -- is never touched.
+.PHONY: plugin-scripts-lua-fetch
+plugin-scripts-lua-fetch:
+	@if [ -d "$(PLUGIN_SCRIPTS_LUA_SRC)" ] || [ -z "$(PLUGIN_SCRIPTS_LUA_GIT_URL)" ]; then exit 0; fi; \
+	branch_opt=""; \
+	if [ -n "$(PLUGIN_SCRIPTS_LUA_GIT_REF)" ]; then branch_opt="--branch $(PLUGIN_SCRIPTS_LUA_GIT_REF)"; fi; \
+	echo "[plugins] Cloning plugin-scripts-lua from $(PLUGIN_SCRIPTS_LUA_GIT_URL)"; \
+	git clone --depth 1 $$branch_opt "$(PLUGIN_SCRIPTS_LUA_GIT_URL)" "$(PLUGIN_SCRIPTS_LUA_SRC)" || { \
+		echo "[plugins] ERROR: clone of plugin-scripts-lua failed."; \
+		exit 1; \
+	}
+
 # Lua helper libraries (feedparser/json/n_gui/n_helpers/…) are a runtime
 # dependency shared by the Lua plugins, not part of any single plugin's install.
 # On the box these arrive via RDEPENDS; on the PC build they are cloned from
 # plugin-scripts-lua, which owns them upstream -- like every other plugin source,
 # they are fetched when they are needed and are not carried in this repository.
 # Kept as its own target (a prerequisite of the mediathek install) so the helpers
-# are staged even when a plugin source tree is absent.
-neutrino-mediathek-lua-helpers:
+# are staged even when a plugin source tree is absent. The fetch is a
+# prerequisite and, as before, happens only when the helpers are taken from
+# plugin-scripts-lua: an explicitly chosen NEUTRINO_LUA_HELPERS_SRC is never
+# silently replaced by a clone.
+HELPERS_FETCH_DEP := $(if $(filter $(LEGACY_LUA_SRC),$(NEUTRINO_LUA_HELPERS_SRC)),plugin-scripts-lua-fetch,)
+neutrino-mediathek-lua-helpers: $(HELPERS_FETCH_DEP)
 	@lualib_src="$(NEUTRINO_LUA_HELPERS_SRC)"; \
 	if [ ! -d "$$lualib_src" ] && [ "$$lualib_src" != "$(LEGACY_LUA_SRC)" ]; then \
 		echo "[plugins] ERROR: NEUTRINO_LUA_HELPERS_SRC points at '$$lualib_src',"; \
@@ -222,15 +242,6 @@ neutrino-mediathek-lua-helpers:
 		exit 1; \
 	fi; \
 	if [ ! -d "$$lualib_src" ] && [ -n "$(PLUGIN_SCRIPTS_LUA_GIT_URL)" ]; then \
-		if [ ! -d "$(PLUGIN_SCRIPTS_LUA_SRC)" ]; then \
-			branch_opt=""; \
-			if [ -n "$(PLUGIN_SCRIPTS_LUA_GIT_REF)" ]; then branch_opt="--branch $(PLUGIN_SCRIPTS_LUA_GIT_REF)"; fi; \
-			echo "[plugins] Cloning plugin-scripts-lua from $(PLUGIN_SCRIPTS_LUA_GIT_URL)"; \
-			git clone --depth 1 $$branch_opt "$(PLUGIN_SCRIPTS_LUA_GIT_URL)" "$(PLUGIN_SCRIPTS_LUA_SRC)" || { \
-				echo "[plugins] ERROR: clone of plugin-scripts-lua failed."; \
-				exit 1; \
-			}; \
-		fi; \
 		if [ -d "$(LEGACY_LUA_SRC)" ]; then \
 			lualib_src="$(LEGACY_LUA_SRC)"; \
 		else \
