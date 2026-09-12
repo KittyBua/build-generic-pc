@@ -48,10 +48,13 @@
 #
 # python3 is a SOFT dependency, used only for one bonus check (that the exact
 # pixel colour survives BGR24->BGRA32 conversion all the way through the
-# CLI); it is not otherwise assumed anywhere in tests-shell (checked: no
-# requirements.txt in this repo, and tests/gui's own imports are stdlib plus
-# pytest, no PIL/Pillow), so its absence skips only that one assertion
-# instead of the file. Everything else -- including the PNG's own
+# CLI); it is not otherwise assumed anywhere in tests-shell. This does NOT
+# mean PIL/Pillow is absent from the project -- it is a pip dependency of
+# scripts/setup_deps.sh and is imported by scripts/gen_appimage.sh -- only
+# that neither tests-shell nor tests/gui (stdlib imports plus pytest, no
+# PIL; no requirements.txt either) already assumes it, so this file does not
+# newly add that assumption. Its absence skips only the one bonus assertion
+# below, never the file. Everything else -- including the PNG's own
 # width/height, read out of its IHDR chunk -- uses only POSIX utilities (od,
 # printf, grep, wc), matching this suite's existing no-external-deps
 # convention.
@@ -241,25 +244,56 @@ if [ "$rc" -eq 2 ]; then ok "--video-size 64x36junk exits 2"; else ko "--video-s
 
 # Phase-4 reserved options: each is its own usage error today (spec section
 # 11); tested individually so a regression in exactly one of them is
-# pinpointed rather than hidden behind a single aggregate check.
+# pinpointed rather than hidden behind a single aggregate check. Asserting
+# the MESSAGE, not just rc -eq 2, matters: a generic "unknown option '%s'"
+# fallback (screencap.c:522) also exits 2, so rc alone cannot tell "still
+# has its own phase-4 usage_error() call" from "the special case was
+# removed and it now falls through to the generic path" -- proven live by
+# the reviewer against a build with the phase-4 handling stripped out, where
+# an rc-only version of these six checks stayed green. `grep -q --` guards
+# against grep parsing a pattern that starts with "--" as its own options.
 run --host box "$WORK/x.png" >/dev/null
 rc=$?
-if [ "$rc" -eq 2 ]; then ok "--host is rejected before phase 4"; else ko "--host is rejected before phase 4" "rc=$rc"; fi
+if [ "$rc" -eq 2 ] && grep -q -- "--host is not available before phase 4" "$WORK/stderr"; then
+	ok "--host is rejected before phase 4 with its own message"
+else
+	ko "--host is rejected before phase 4 with its own message" "rc=$rc: $(cat "$WORK/stderr")"
+fi
 run --port 1234 "$WORK/x.png" >/dev/null
 rc=$?
-if [ "$rc" -eq 2 ]; then ok "--port is rejected before phase 4"; else ko "--port is rejected before phase 4" "rc=$rc"; fi
+if [ "$rc" -eq 2 ] && grep -q -- "--port is not available before phase 4" "$WORK/stderr"; then
+	ok "--port is rejected before phase 4 with its own message"
+else
+	ko "--port is rejected before phase 4 with its own message" "rc=$rc: $(cat "$WORK/stderr")"
+fi
 run --user someone "$WORK/x.png" >/dev/null
 rc=$?
-if [ "$rc" -eq 2 ]; then ok "--user is rejected before phase 4"; else ko "--user is rejected before phase 4" "rc=$rc"; fi
+if [ "$rc" -eq 2 ] && grep -q -- "--user is not available before phase 4" "$WORK/stderr"; then
+	ok "--user is rejected before phase 4 with its own message"
+else
+	ko "--user is rejected before phase 4 with its own message" "rc=$rc: $(cat "$WORK/stderr")"
+fi
 run --key KEY_OK "$WORK/x.png" >/dev/null
 rc=$?
-if [ "$rc" -eq 2 ]; then ok "--key is rejected before phase 4"; else ko "--key is rejected before phase 4" "rc=$rc"; fi
+if [ "$rc" -eq 2 ] && grep -q -- "--key is not available before phase 4" "$WORK/stderr"; then
+	ok "--key is rejected before phase 4 with its own message"
+else
+	ko "--key is rejected before phase 4 with its own message" "rc=$rc: $(cat "$WORK/stderr")"
+fi
 run --key-gap 100 "$WORK/x.png" >/dev/null
 rc=$?
-if [ "$rc" -eq 2 ]; then ok "--key-gap is rejected before phase 4"; else ko "--key-gap is rejected before phase 4" "rc=$rc"; fi
+if [ "$rc" -eq 2 ] && grep -q -- "--key-gap is not available before phase 4" "$WORK/stderr"; then
+	ok "--key-gap is rejected before phase 4 with its own message"
+else
+	ko "--key-gap is rejected before phase 4 with its own message" "rc=$rc: $(cat "$WORK/stderr")"
+fi
 run --via daemon "$WORK/x.png" >/dev/null
 rc=$?
-if [ "$rc" -eq 2 ]; then ok "--via daemon is rejected before phase 4"; else ko "--via daemon is rejected before phase 4" "rc=$rc"; fi
+if [ "$rc" -eq 2 ] && grep -q -- "--via daemon is not available before phase 4" "$WORK/stderr"; then
+	ok "--via daemon is rejected before phase 4 with its own message"
+else
+	ko "--via daemon is rejected before phase 4 with its own message" "rc=$rc: $(cat "$WORK/stderr")"
+fi
 
 # ==========================================================================
 # 3. An explicitly named OSD device that cannot be opened is the HARD class
@@ -400,7 +434,71 @@ case "$out" in
 esac
 
 # ==========================================================================
-# 7. Device errors are never best effort: OSD hard-fails (explicit bad
+# 7. A target inside a directory that does not exist is device write
+#    failure (19), with the real errno and the actual temp-file path in the
+#    text. Silent write failure is the exact WORK-273 shape (the tool says
+#    "ok" while nothing landed on disk); this pins that the CLI's own
+#    exit_for() mapping for SCREENCAP_ERR_WRITE is reachable end to end
+#    through the argument parser and backend construction, not only
+#    unit-tested inside libstb-hal's encode_file() in isolation.
+out="$(run --video --video-device "$WORK/frame.bgr" --video-size ${VW}x${VH} "$WORK/no-such-dir/out.png")"
+rc=$?
+if [ "$rc" -eq 19 ]; then ok "writing into a non-existent directory exits 19"; else ko "writing into a non-existent directory exits 19" "rc=$rc: $out"; fi
+case "$out" in
+	*"write errno="*"No such file or directory"*) ok "the report gives the real write errno and reason" ;;
+	*) ko "the report gives the real write errno and reason" "$out" ;;
+esac
+
+# ==========================================================================
+# 8. PATH_MAX: a FILE argument at/over the limit is a clean usage error,
+#    never a silent truncation -- the Critical finding of the Task 7 review
+#    (a 708-char path was accepted, silently shortened, and the tool still
+#    exited 0; screencap.c:548-549 now guards this explicitly) -- and a
+#    long-but-still-valid path is written in full, under the exact name
+#    asked for, not a shortened one. With Task 9 (hardware) not running this
+#    session, this is the only executable coverage this defect class gets
+#    in Phase 1.
+toolong="$WORK/$(head -c 4200 /dev/zero | tr '\0' a)"
+run "$toolong" >/dev/null
+rc=$?
+if [ "$rc" -eq 2 ] && grep -q "FILE path is too long" "$WORK/stderr"; then
+	ok "a FILE path at/over PATH_MAX is a usage error, not a silent truncation"
+else
+	ko "a FILE path at/over PATH_MAX is a usage error, not a silent truncation" "rc=$rc: $(cat "$WORK/stderr")"
+fi
+
+# 15 nested 200-byte directory components: ~3000 bytes, long enough to be a
+# meaningful stress case while staying comfortably under PATH_MAX (4096) on
+# both the tool's own check and the real filesystem's -- /dev/zero + tr
+# avoids the embedded-NUL problem a shell variable would have for arbitrary
+# binary data, but is moot here since 'a' has none; used anyway for the same
+# fast, dependency-free repeat-a-byte technique as the frame.bgr fixture.
+comp="$(head -c 200 /dev/zero | tr '\0' a)"
+longdir="$WORK"
+n=1
+while [ "$n" -le 15 ]; do
+	longdir="$longdir/$comp"
+	n=$((n + 1))
+done
+mkdir -p "$longdir"
+longfile="$longdir/deep.png"
+out="$(run --video --video-device "$WORK/frame.bgr" --video-size ${VW}x${VH} "$longfile")"
+rc=$?
+if [ "$rc" -eq 0 ]; then ok "a long-but-valid path (${#longfile} bytes) exits 0"; else ko "a long-but-valid path (${#longfile} bytes) exits 0" "rc=$rc: $out"; fi
+if [ -e "$longfile" ]; then
+	ok "the long path is written in full, under the exact name asked for"
+else
+	ko "the long path is written in full, under the exact name asked for" "not found at: $longfile"
+fi
+wh="$(png_wh "$longfile")"
+if [ "$wh" = "$VW $VH" ]; then
+	ok "the file at the long path is a genuine ${VW}x${VH} capture, not a stub"
+else
+	ko "the file at the long path is a genuine ${VW}x${VH} capture, not a stub" "IHDR says: $wh"
+fi
+
+# ==========================================================================
+# 9. Device errors are never best effort: OSD hard-fails (explicit bad
 #    --fb-device) while video would succeed, and neither --strict nor the
 #    default best-effort mode may turn that into a partial exit 0. This is
 #    the central "never a false ok" property WORK-273 exists to enforce --
@@ -417,7 +515,7 @@ else
 fi
 
 # ==========================================================================
-# 8. -q/--quiet: nothing at all on success (spec/--help: "errors only"), the
+# 10. -q/--quiet: nothing at all on success (spec/--help: "errors only"), the
 #    full report on failure. Catches -q's success branch printing a
 #    half-quiet "Result ok" line, and catches -q hiding a real failure.
 out="$(run -q --video --video-device "$WORK/frame.bgr" --video-size ${VW}x${VH} "$WORK/q_ok.png")"
@@ -440,7 +538,7 @@ else
 fi
 
 # ==========================================================================
-# 9. --repeat with a numbered series and --json: exit 0 only if every
+# 11. --repeat with a numbered series and --json: exit 0 only if every
 #    iteration is ok, the %02d template is honoured, and the JSON reflects
 #    exactly the right number of iterations, all "ok". Catches the series
 #    file naming breaking, and the JSON iteration count/status not matching
@@ -466,7 +564,7 @@ else
 fi
 
 # ==========================================================================
-# 10. --probe --json: the OSD hard-fails (bad --fb-device), video is real.
+# 12. --probe --json: the OSD hard-fails (bad --fb-device), video is real.
 #     Per-stage attribution must be exact (osd_open errors as device-open,
 #     osd_read is skipped, video/encode/write are ok), and -- ruling R12 --
 #     the probe must NEVER touch the FILE argument itself, only a private
@@ -509,7 +607,7 @@ else
 fi
 
 # ==========================================================================
-# 11. FILE '-': the image goes to stdout, the report to stderr -- never
+# 13. FILE '-': the image goes to stdout, the report to stderr -- never
 #     mixed, or a script doing `screencap - | decoder` would feed the
 #     decoder a corrupted stream. Stdout is redirected straight to a file
 #     here (never captured through a shell variable): it carries raw binary
