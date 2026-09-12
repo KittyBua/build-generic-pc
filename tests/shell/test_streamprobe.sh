@@ -1,6 +1,7 @@
 #!/bin/sh
 #
-# Contract test for the streamprobe tool (neutrino, src/tools/streamprobe.c).
+# Contract test for the streamprobe tool
+# (neutrino, src/tools/streamprobe/streamprobe.c).
 #
 # streamprobe exists so a developer can investigate a stream on a PC and have
 # the answer mean something on a box: it opens through the same streaminput
@@ -257,7 +258,7 @@ fi
 # what the text says, and the text has to say what the header says.
 got_ver="$(printf '%s\n' "$first" | sed -E 's/^streamprobe ([^ ]+) .*/\1/')"
 neu_ver="$(printf '%s\n' "$first" | sed -E 's/^streamprobe [^ ]+ \([^ ]+ ([^ )]+)\)$/\1/')"
-VERSION_HDR="$ROOT_DIR/sources/neutrino/src/tools/streamprobe_version.h"
+VERSION_HDR="$ROOT_DIR/sources/neutrino/src/tools/streamprobe/streamprobe_version.h"
 if [ -r "$VERSION_HDR" ]; then
 	want_ver="$(awk '$1 == "#define" && $2 ~ /^STREAMPROBE_VERSION_(MAJOR|MINOR|PATCH)$/ { v[$2] = $3 }
 		END { print v["STREAMPROBE_VERSION_MAJOR"] "." v["STREAMPROBE_VERSION_MINOR"] "." v["STREAMPROBE_VERSION_PATCH"] }' \

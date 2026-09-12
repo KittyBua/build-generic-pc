@@ -1,6 +1,7 @@
 #!/bin/sh
 #
-# Contract test for the screencap tool (neutrino, src/tools/screencap.c; core
+# Contract test for the screencap tool (neutrino,
+# src/tools/screencap/screencap.c; core
 # in libstb-hal, common/screencap*.c). screencap exists so a capture failure
 # on a live box (WORK-273: an empty screenshot after long uptime, with no clue
 # why) can be reproduced and localised from a script, on a PC build or on
@@ -97,7 +98,7 @@ if [ ! -x "$BIN" ]; then
 fi
 
 # The binary links libswscale/libavutil (screencap_LDADD in
-# src/tools/Makefile.am); on a machine without the matching system dev
+# src/tools/screencap/Makefile.am); on a machine without the matching system dev
 # packages, only the staged sysroot copy resolves the SONAMEs -- same
 # reasoning and same path as test_streamprobe.sh's run().
 #
