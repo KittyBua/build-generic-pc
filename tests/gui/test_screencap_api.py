@@ -40,6 +40,17 @@ NHTTPD_CONF = (
     / "root" / "usr" / "var" / "tuxbox" / "config" / "nhttpd.conf"
 )
 
+# OwnedDisplay's private Xvfb is a fixed 1280x720 (neutrino_run.py:50), and
+# the GL window fills it exactly: measured, not assumed -- a real capture
+# on this fixture comes back at precisely 1280x720. Asserting that exact
+# figure (not just "> 0") is strictly tighter without hardcoding a box
+# resolution: a stride, half-buffer or zero-size regression in the legacy
+# conversion would produce some *other* number and get caught, where a
+# bare positivity check would wave it through. 1920x1080 is not expected
+# here (see the module docstring) -- this is the window's own size.
+EXPECTED_OSD_W = 1280
+EXPECTED_OSD_H = 720
+
 # scripts/run-neutrino.sh execs root/usr/bin/neutrino, which `make
 # runtime-sync` installs as a wrapper that sets LUA_PATH and then runs
 # neutrino.real beside it (see test_webtv_scripts.py, which this mirrors).
@@ -59,12 +70,15 @@ def _require_fresh_binary() -> None:
     test_webtv_scripts.py and the neutrino-generic-build shared memory):
     `make -C build/neutrino` alone leaves the runtime root untouched, so a
     run right after it would exercise whatever `make neutrino` installed
-    last, not the working tree; and `make test-gui` never sets
-    NEUTRINO_INSTALL_DIR, so require_isolated_run() -> ensure_neutrino_
-    running() looks for /usr/bin/neutrino on the bare host, finds nothing,
-    and skips every test in this file without a word about why. Pointing
-    it at the tree `make neutrino` fills makes that check agree with the
-    tree this file actually starts Neutrino from.
+    last, not the working tree; and a bare `pytest` invocation of this file
+    (not through `make test-gui`, which exports NEUTRINO_INSTALL_DIR via
+    make/env-derive.mk's `.EXPORT_ALL_VARIABLES:`) never sets it, so
+    require_isolated_run() -> ensure_neutrino_running() looks for
+    /usr/bin/neutrino on the bare host, finds nothing, and skips every test
+    in this file without a word about why -- exactly the shape of the
+    brief's own step-2 verification command. Pointing it at the tree `make
+    neutrino` fills makes that check agree with the tree this file actually
+    starts Neutrino from, regardless of how the file is invoked.
     """
     if not RUNTIME_BINARY.exists():
         pytest.skip(f"{RUNTIME_BINARY} missing - run `make neutrino` first")
@@ -151,6 +165,17 @@ def _alpha_maximum(png: Path) -> float:
     return float(out)
 
 
+def _unique_colors(png: Path) -> int:
+    """Rejects the other half of "blank": alpha-maximum > 0 only proves the
+    buffer is not all-transparent, and would wave through a uniformly
+    opaque single-colour fill just as happily as a real, painted OSD."""
+    out = subprocess.run(
+        ["convert", str(png), "-format", "%k", "info:"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return int(out)
+
+
 @pytest.fixture
 def private_display(monkeypatch):
     """A display of this test's own -- never the developer's session."""
@@ -177,6 +202,16 @@ def neutrino(tmp_path: Path, private_display):
     workdir = tmp_path / "screencap"
     (workdir / "config").mkdir(parents=True)
     _seed_config(workdir / "config")
+    # glfb.cpp's unlink+mkfifo+open(O_RDWR) creates this FIFO but nothing
+    # ever removes it again: ~GLFbPC() only closes the fd, and stop() below
+    # SIGTERMs the process group without touching the filesystem. Left in
+    # place, _settle_startup's "wait for the FIFO to appear" loop finds the
+    # PREVIOUS instance's stale file immediately and stops waiting before
+    # this one has created its own -- a real race after any earlier
+    # isolated run, including test 1 of this very file before test 2.
+    # require_isolated_run() above already guarantees no other neutrino.real
+    # is running, so nothing can be reading the file we are about to remove.
+    Path(os.environ.get("NEUTRINO_INPUT_FIFO", "/tmp/neutrino.input")).unlink(missing_ok=True)
     instance = IsolatedNeutrino(workdir, private_display.display, simulate_fe="0")
     try:
         _settle_startup(instance)
@@ -202,9 +237,12 @@ def test_osd_only_screenshot_is_a_real_osd(neutrino):
     png = _shot(f"sc-osd-{os.getpid()}", osd=1, video=0)
     try:
         w, h, channels = _identify(png)
-        assert w > 0 and h > 0, f"empty geometry {w}x{h}"
-        assert "a" in channels, f"no alpha channel: {channels}"
+        assert (w, h) == (EXPECTED_OSD_W, EXPECTED_OSD_H), (
+            f"unexpected geometry {w}x{h}, expected {EXPECTED_OSD_W}x{EXPECTED_OSD_H}"
+        )
+        assert channels.endswith("a"), f"no alpha channel: {channels}"
         assert _alpha_maximum(png) > 0.0, "alpha is empty everywhere: no OSD in the shot"
+        assert _unique_colors(png) > 1, "a single uniform colour: no real OSD content painted"
     finally:
         png.unlink(missing_ok=True)
 
@@ -218,7 +256,9 @@ def test_video_requested_without_tuner_still_answers_ok(neutrino):
     png = _shot(f"sc-both-{os.getpid()}", osd=1, video=1)
     try:
         w, h, _ = _identify(png)
-        assert w > 0 and h > 0
+        assert (w, h) == (EXPECTED_OSD_W, EXPECTED_OSD_H), (
+            f"unexpected geometry {w}x{h}, expected {EXPECTED_OSD_W}x{EXPECTED_OSD_H}"
+        )
     finally:
         png.unlink(missing_ok=True)
 
