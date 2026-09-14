@@ -317,6 +317,19 @@ ifeq ($(NEUTRINO_STAGE_RUNTIME),1)
 	@# The webroot is owned by the staged-install overlay below. This sync
 	@# carries --delete and no longer has a copy of it on the sending side,
 	@# so without the exclude it would wipe the served tree every time.
+	@# FIXME: share/fonts needs the same protection and does not get it, so
+	@# every build silently deletes the staged fonts. Neutrino is configured
+	@# with an absolute --with-fontdir, so `make install DESTDIR=' drops the
+	@# .ttf files under DESTDIR + the absolute runtime path and NOT under
+	@# DESTDIR/usr -- share/fonts is the only directory that exists solely
+	@# there. The runtime-sync recipe in make/main.mk covers exactly this
+	@# with a SECOND, non-deleting rsync from that tree; this recipe
+	@# replicates only its first stage, so the fonts go and stay gone until
+	@# somebody runs `make runtime-sync' by hand. The symptom points nowhere
+	@# near the cause: the GUI suite fails on missing fonts, not on a build
+	@# error. Fix by excluding /share/fonts/*** here, or by carrying
+	@# main.mk's second stage into this recipe so both paths stage the same
+	@# tree.
 	@rsync -a --no-owner --no-group --delete \
 		--exclude='/var/tuxbox/**' \
 		--exclude='/var/tuxbox/' \

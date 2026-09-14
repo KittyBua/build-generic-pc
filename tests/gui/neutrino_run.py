@@ -184,6 +184,21 @@ class IsolatedNeutrino:
         # wait until the group is actually empty: the wrapper exits before
         # neutrino.real does, and the next test's "is one already running?"
         # check must not see our leftovers.
+        #
+        # TODO: this cleans up processes but nothing on disk, and one leftover
+        # file quietly weakens every test that waits for startup. The HAL's
+        # GLFbPC constructor does unlink -> mkfifo -> open on
+        # /tmp/neutrino.input and its destructor only closes the descriptor,
+        # so the FIFO outlives the run. Any test that waits for that path to
+        # appear before sending a key therefore returns instantly from the
+        # SECOND run onwards -- it finds the previous instance's file -- and is
+        # left relying on whatever fixed sleep follows. If the new instance has
+        # not reached GLFbPC by then, the write hits ENXIO, send_keys reports
+        # "has no reader", and utils.fail_or_skip turns that into a skip: the
+        # test silently does not run. test_screencap_api.py unlinks the path
+        # itself before starting its instance, which works but has to be
+        # repeated in every such test. Unlinking it here, once, would fix it
+        # for all of them.
         try:
             os.killpg(self.proc.pid, signal.SIGTERM)
         except ProcessLookupError:

@@ -184,6 +184,18 @@ def _leave_legacy_dialog(display: str, shot: Path) -> None:
     settle(shot, display)
 
 
+# FIXME: both tests in this file take `owned_display`, which reuses whatever
+# $DISPLAY the caller happens to have. On a developer machine with a desktop
+# session that is the real screen, so these tests drive the user's actual
+# desktop and read it back by OCR -- one run picked up fragments of unrelated
+# files that happened to be open. They then fail for reasons that have nothing
+# to do with Neutrino, and because `make test-gui' passes --maxfail=1 and this
+# file sorts early, they abort the whole suite before any later file runs. The
+# workaround everybody ends up finding is `env -u DISPLAY make test-gui'.
+# test_webtv_scripts.py and test_screencap_api.py each define a private_display
+# fixture that does the right thing: it deletes DISPLAY before constructing
+# OwnedDisplay, forcing the private-Xvfb branch. That fixture belongs in
+# conftest.py next to owned_display, and these two tests should take it.
 @pytest.mark.gui
 def test_pinned_layout_survives_restart_and_is_saved(
     owned_display: OwnedDisplay, tmp_path: Path
