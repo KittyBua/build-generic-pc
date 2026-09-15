@@ -612,6 +612,13 @@ run-gdb-debug: ## Launch debug build inside gdb (headless, separate dirs)
 		NEUTRINO_RUNTIME_PREFIX=$(NEUTRINO_RUNTIME_PREFIX_DEBUG) \
 		run-gdb
 
+# Pre-existing leaks of the GL stack, freetype and the XMLTV import thread,
+# each measured identically on the commit before the current work. Without
+# it every memcheck run has to be triaged stack by stack; with it a clean
+# run says "definitely lost: 0 bytes". Nothing in the screenshot path is
+# suppressed -- see the file's own header.
+VALGRIND_SUPP ?= $(ROOT_DIR)/tests/valgrind/neutrino-pc.supp
+
 .PHONY: run-valgrind
 run-valgrind: neutrino runtime-sync ## Launch Neutrino under Valgrind memcheck
 	@if [ "$(ALLOW_NON_ROOT)" != "1" ]; then \
@@ -631,7 +638,7 @@ run-valgrind: neutrino runtime-sync ## Launch Neutrino under Valgrind memcheck
 		NEUTRINO_INSTALL_DIR=$(NEUTRINO_INSTALL_DIR) \
 		G_SLICE=always-malloc \
 		G_DEBUG=gc-friendly \
-		NEUTRINO_RUN_WRAPPER="$(VALGRIND) --tool=memcheck --leak-check=full --error-limit=no --num-callers=40 --show-leak-kinds=all --track-origins=yes --log-file=$$log_file -v" \
+		NEUTRINO_RUN_WRAPPER="$(VALGRIND) --tool=memcheck --leak-check=full --error-limit=no --num-callers=40 --show-leak-kinds=all --track-origins=yes --suppressions=$(VALGRIND_SUPP) --log-file=$$log_file -v" \
 		./scripts/run_neutrino.sh; \
 		rc=$$?; \
 		ln -sf "$$log_file" "$$latest_link"; \

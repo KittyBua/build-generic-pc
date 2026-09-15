@@ -1,0 +1,138 @@
+# Valgrind memcheck suppressions for the generic (PC) Neutrino build.
+#
+# Every entry here was MEASURED on this build, and every one of them was
+# measured IDENTICALLY on a Neutrino built from f814992f -- the commit
+# before the WORK-273 screenshot work began -- with the same workload
+# (50 /control/screenshot requests, clean SIGTERM shutdown). They are
+# the environment's noise, not the application's news:
+#
+#     definitely lost: 220 bytes in 4 blocks     (both builds)
+#     indirectly lost: 1,616 bytes in 5 blocks   (both builds)
+#       possibly lost: 3,689,344 bytes in 8 blocks (both builds)
+#
+# The point of the file is that a future run answers "definitely lost:
+# 0 bytes" when nothing new leaks, so a real regression is visible
+# without a stack-by-stack triage.
+#
+# NOTHING IN THE SCREENSHOT PATH IS SUPPRESSED, on purpose: no
+# CScreencapService, CScreencapQueue, ScreenshotCGI, screencap_* or PNG
+# encode frame appears below. A leak there has to show.
+#
+# Frames are matched with "..." and wildcarded object paths so the file
+# survives a different checkout directory or Mesa version. Generated with
+# --gen-suppressions=all, then generalised by hand.
+
+# --- Neutrino's own, pre-existing -------------------------------------
+#
+# The XMLTV EPG import thread builds a temporary file name (through
+# randomFile()) and a string, and drops both. Two records, 31 + 77 = 108
+# bytes, both below insertEventsfromXMLTV, so one entry covers them;
+# present on f814992f.
+{
+   neutrino-xmltv-string
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:_Znwm
+   ...
+   fun:_Z21insertEventsfromXMLTVPv
+   ...
+}
+
+# --- Mesa / freeglut / GLX --------------------------------------------
+#
+# The GL back buffer and the window the GL thread creates: allocated
+# inside the Mesa driver, never handed back before _exit. 1,616 bytes
+# definite + indirect from window creation, and the 3,686,400-byte
+# (1280x720x4) back buffer as "possibly lost" because Mesa keeps only an
+# interior pointer to it. Present on f814992f, and not reachable from
+# any Neutrino code path that could free it.
+{
+   mesa-freeglut-open-window
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect
+   fun:malloc
+   ...
+   fun:fgPlatformOpenWindow
+   ...
+}
+{
+   mesa-freeglut-backbuffer
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:memalign
+   fun:posix_memalign
+   ...
+   fun:glutCreateWindow
+   ...
+}
+# Allocated by the Mesa driver while the GL thread draws. The frames
+# between calloc and drawSquare are inside the driver and have no
+# symbols; the record is anchored on the two Neutrino frames that do.
+{
+   mesa-glfbpc-draw
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect
+   fun:calloc
+   ...
+   fun:_ZN6GLFbPC10drawSquareEff
+   fun:_ZN6GLFbPC6renderEv
+   ...
+}
+# libGLdispatch allocates its stub tables from the dynamic loader, before
+# main() runs.
+{
+   gldispatch-init
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   obj:*libGLdispatch.so*
+   fun:__glDispatchInit
+   ...
+}
+{
+   gldispatch-stub-callbacks
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   obj:*libGLdispatch.so*
+   fun:__glDispatchRegisterStubCallbacks
+   ...
+}
+
+# --- glibc thread-local storage ---------------------------------------
+#
+# The TLS block of a thread that is still alive when the process exits.
+# glibc frees it in pthread_join; these threads are never joined, because
+# the process leaves through _exit. Not a Neutrino allocation at all.
+#
+# Deliberately NOT written as a blanket "any pthread_create": the
+# screencap worker is created by a bare pthread_create() inside
+# CScreencapQueue, and a blanket entry would hide its TLS too. Each entry
+# below names the creator it was measured under, so a worker that is no
+# longer joined shows up as an unsuppressed block instead.
+{
+   glibc-tls-openthreads
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:calloc
+   fun:calloc
+   fun:allocate_dtv
+   fun:_dl_allocate_tls
+   fun:allocate_stack
+   fun:pthread_create@@*
+   fun:_ZN11OpenThreads6Thread5startEv
+   ...
+}
+{
+   glibc-tls-neutrino-main
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:calloc
+   fun:calloc
+   fun:allocate_dtv
+   fun:_dl_allocate_tls
+   fun:allocate_stack
+   fun:pthread_create@@*
+   fun:_ZN12CNeutrinoApp3runEiPPc
+   fun:main
+}
