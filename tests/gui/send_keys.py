@@ -54,6 +54,11 @@ KEYS = {
     # selection the menu remembered - the reset that UP/DOWN (which do
     # wrap) cannot provide.
     "PAGEUP": "KEY_PAGEUP",
+    # CRCInput::RC_games -- the factory default of key_screenshot
+    # (neutrino.cpp: getInt32("key_screenshot", CRCInput::RC_games)), and
+    # bound to nothing else. The screenshot tests press this rather than
+    # rebind the setting, so they exercise the binding users really get.
+    "GAMES": "KEY_GAMES",
     # menus print a digit next to each entry and jump straight to it. Counting
     # cursor steps instead is unreliable, because a menu reopens on whatever
     # was selected last time.
@@ -128,6 +133,7 @@ KEY_CODES = {
     "KEY_MUTE": 113,
     "KEY_POWER": 116,
     "KEY_PAGEUP": 104,
+    "KEY_GAMES": 417,  # 0x1a1, "Media Select Games"
     # Letter keys, for the direct typing path. CRCInput::translate() passes
     # unknown codes through unchanged and CRCInput::getUnicodeValue() indexes
     # its table by the code, so these arrive as characters rather than as
