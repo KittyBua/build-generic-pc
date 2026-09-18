@@ -129,7 +129,13 @@ class IsolatedNeutrino:
     change what the next `make run` starts with.
     """
 
-    def __init__(self, workdir: Path, display: str, simulate_fe: str = "0"):
+    def __init__(
+        self,
+        workdir: Path,
+        display: str,
+        simulate_fe: str = "0",
+        extra_env: dict[str, str] | None = None,
+    ):
         self.workdir = workdir
         self.config = workdir / "config"
         self.log = workdir / "stdout.log"
@@ -138,6 +144,8 @@ class IsolatedNeutrino:
         env["DISPLAY"] = display
         env["SIMULATE_FE"] = simulate_fe
         env["NEUTRINO_EXIT_CODES"] = "posix"
+        if extra_env:
+            env.update(extra_env)
         # Everything below the root window before this run started. Neutrino
         # sets neither a window name nor _NET_WM_PID, so "which window is
         # Neutrino's" has no direct answer -- but "which windows appeared with
