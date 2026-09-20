@@ -78,21 +78,25 @@ def _require_fresh_binary() -> None:
     """Guard against testing yesterday's build.
 
     `make -C build/neutrino` leaves the runtime root untouched, so a run
-    started right after it exercises whatever `make neutrino` installed last --
-    measured on 2026-09-09, when a first pass ran against a binary from another
-    branch and produced a finding that was pure fiction. require_isolated_run()
-    does not catch this: it looks for NEUTRINO_INSTALL_DIR, which `make
-    tests-gui` never sets, so it either skips or checks a different tree than
-    the one that starts.
+    started right after it exercises whatever `make neutrino` installed
+    last -- measured on 2026-09-09, when a first pass ran against a binary
+    from another branch and produced a finding that was pure fiction.
+
+    require_isolated_run() does not catch this, and is not meant to: its
+    ensure_neutrino_running() asks whether anything was built at all and
+    looks in the staged sysroot, while this asks whether the ELF that
+    scripts/run-neutrino.sh will exec is current, over in the runtime
+    mirror. This docstring used to say that guard "looks for
+    NEUTRINO_INSTALL_DIR, which `make tests-gui` never sets" -- wrong since
+    the first commit: make/env-derive.mk exports it by name and exports
+    everything again through `.EXPORT_ALL_VARIABLES:', both included before
+    make/tests.mk. Said plainly rather than quietly deleted, because that
+    sentence travelled into notes kept elsewhere. What was true is that a
+    bare `pytest' got nothing, and the setdefault that used to sit here
+    papered over it for this one file; the guard has the fallback now.
     """
     if not RUNTIME_BINARY.exists():
         pytest.skip(f"{RUNTIME_BINARY} missing - run `make neutrino` first")
-    # require_isolated_run() builds its path from these; point it at the tree
-    # that `make neutrino` fills, so its check and this one agree.
-    os.environ.setdefault(
-        "NEUTRINO_INSTALL_DIR",
-        str(Path(__file__).resolve().parents[2] / "artifacts" / "sysroot"),
-    )
 
 
 def _binary_has(symbol: str) -> bool:

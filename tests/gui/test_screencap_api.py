@@ -64,28 +64,25 @@ if not RUNTIME_BINARY.exists():
 
 
 def _require_fresh_binary() -> None:
-    """Guard against testing yesterday's build, and against a silent skip.
+    """Guard against testing yesterday's build.
 
-    Two independent traps, both already on record for this suite (see
-    test_webtv_scripts.py and the neutrino-generic-build shared memory):
     `make -C build/neutrino` alone leaves the runtime root untouched, so a
     run right after it would exercise whatever `make neutrino` installed
-    last, not the working tree; and a bare `pytest` invocation of this file
-    (not through `make test-gui`, which exports NEUTRINO_INSTALL_DIR via
-    make/env-derive.mk's `.EXPORT_ALL_VARIABLES:`) never sets it, so
-    require_isolated_run() -> ensure_neutrino_running() looks for
-    /usr/bin/neutrino on the bare host, finds nothing, and skips every test
-    in this file without a word about why -- exactly the shape of the
-    brief's own step-2 verification command. Pointing it at the tree `make
-    neutrino` fills makes that check agree with the tree this file actually
-    starts Neutrino from, regardless of how the file is invoked.
+    last, not the working tree -- and this file reads the ELF to decide
+    what it may assert, so a stale one yields findings about a binary
+    nobody asked about.
+
+    require_isolated_run() does not cover this, and is not meant to. Its
+    ensure_neutrino_running() asks whether anything was built at all and
+    looks in the staged sysroot; this asks whether the ELF that
+    scripts/run-neutrino.sh will actually exec is current, and that one
+    lives in the runtime mirror beside the wrapper. Two trees, two
+    questions. The os.environ.setdefault that used to sit here, pointing
+    the first check at the sysroot for a bare `pytest', is gone: the guard
+    carries that fallback itself now, for all twelve files instead of two.
     """
     if not RUNTIME_BINARY.exists():
         pytest.skip(f"{RUNTIME_BINARY} missing - run `make neutrino` first")
-    os.environ.setdefault(
-        "NEUTRINO_INSTALL_DIR",
-        str(Path(__file__).resolve().parents[2] / "artifacts" / "sysroot"),
-    )
 
 
 def _binary_has(symbol: str) -> bool:

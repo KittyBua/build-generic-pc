@@ -19,13 +19,51 @@ def require_binary(name: str) -> None:
         pytest.skip(f"{name} binary is required for this test")
 
 
+# The tree `make neutrino` fills. NEUTRINO_INSTALL_DIR defaults to
+# $(OUTPUT_DIR)/sysroot (make/env.mk on make/paths.mk), and this mirrors that
+# default rather than reading it back: resolving it out of Makefile.local
+# would mean reimplementing make's own variable expansion, which
+# tests/shell/test_make_config.sh exists to show is not trivial. Same shape
+# scripts/cleanup_runtime.sh already falls back to.
+_DEFAULT_INSTALL_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "sysroot"
+
+
 def ensure_neutrino_running() -> None:
-    """Skip if the Neutrino binary is not reachable."""
-    install_dir = os.environ.get("NEUTRINO_INSTALL_DIR")
+    """Skip if Neutrino was never built.
+
+    The name promises more than the check delivers, and that is on
+    purpose -- see send_keys_skip_reason() below: an installed binary is
+    not a running one. All this establishes is that a build tree exists.
+
+    Where to look is NEUTRINO_INSTALL_DIR's job, and `make test-gui' hands
+    it down (make/env-derive.mk exports it by name, and again through
+    `.EXPORT_ALL_VARIABLES:'). A bare `pytest tests/gui/...' does not go
+    through make and got nothing -- and the old code then joined the empty
+    string with the prefix and stat'ed the RELATIVE path `usr/bin/neutrino'
+    against the current directory. Never there, so ten of the twelve files
+    that reach this guard skipped whole, and the message named no path to
+    go looking for.
+
+    Two of the twelve carried a private os.environ.setdefault of exactly
+    this value. That leaked: setdefault mutates the session, so in a bare
+    full-suite run the files sorting before test_screencap_api.py skipped
+    and the ones after it ran -- the same file passing or skipping
+    depending on its neighbours.
+
+    So fall back to the default install dir instead of to nothing, beside
+    NEUTRINO_PREFIX's hard-coded default: one of the two inputs having a
+    default and the other not was the whole defect. A checkout that moved
+    OUTPUT_DIR still has to say so, and the skip names the path it tried,
+    so that case reads in one line instead of costing a run.
+    """
+    install_dir = os.environ.get("NEUTRINO_INSTALL_DIR") or _DEFAULT_INSTALL_DIR
     prefix = os.environ.get("NEUTRINO_PREFIX", "/usr")
-    candidate = Path(install_dir or "") / prefix.strip("/") / "bin" / "neutrino"
+    candidate = Path(install_dir) / prefix.strip("/") / "bin" / "neutrino"
     if not candidate.exists():
-        pytest.skip("Neutrino binary not installed – run `make neutrino` first")
+        pytest.skip(
+            f"Neutrino not built: no {candidate} - run `make neutrino`, or set "
+            "NEUTRINO_INSTALL_DIR if this checkout stages elsewhere"
+        )
 
 
 def send_keys_skip_reason(stderr: str) -> str | None:
