@@ -118,7 +118,7 @@ CORE_PACKAGES_APT+=("${NEUTRINO_DEPS_APT[@]}")
 # guard silently protected nothing, which is how the run-report suite found it.
 OPTIONAL_PACKAGES_APT=(
   python3-opencv python3-numpy tesseract-ocr libleptonica-dev
-  xvfb x11-apps fbcat netpbm fonts-dejavu-core
+  xvfb x11-apps x11-utils fbcat netpbm fonts-dejavu-core
   libevdev-dev evtest proot libfuse2
   appstream file desktop-file-utils squashfs-tools patchelf
   procps
@@ -155,6 +155,12 @@ CORE_PACKAGES_DNF+=("${NEUTRINO_DEPS_DNF[@]}")
 
 OPTIONAL_PACKAGES_DNF=(
   opencv opencv-devel tesseract tesseract-devel leptonica-devel
+  # xdpyinfo is missing here on purpose, not by oversight: the GUI suite
+  # needs it (see the apt list's x11-utils), but `dnf install' below runs
+  # without --skip-broken, so a package name guessed from a Debian host
+  # would break provisioning for every Fedora user instead of only
+  # leaving a gap. Whoever next has a Fedora box: `dnf provides
+  # */xdpyinfo' and add it.
   xorg-x11-server-Xvfb netpbm-progs dejavu-sans-fonts
   libevdev-devel evtest fuse fuse-libs
   appstream file desktop-file-utils squashfs-tools patchelf

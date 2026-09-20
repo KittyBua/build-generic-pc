@@ -59,21 +59,28 @@ class OwnedDisplay:
 
     Watching a run is not what this is for: there is deliberately no
     variable that points it back at a session, because that is the same
-    door under another name. `x11vnc -display :97' looks in from outside.
+    door under another name. `x11vnc -display :100' looks in from outside.
 
     The attaching tests (test_menu.py, test_overlay_paint.py,
     test_input_dialog.py) do not come through here at all: they drive a
     Neutrino the developer started and need the ambient DISPLAY.
     """
 
-    # :97 upwards. High enough to clear a session (:0) and the manual
-    # runtime display scripts/run-neutrino.sh uses (:99). Walking is not
-    # what makes the suite parallelisable and does not mean it is -- the
-    # input FIFO is a compile-time path and require_isolated_run() forbids
-    # a second instance anyway. It only keeps one leftover server from
-    # taking every later run down with it.
-    FIRST_DISPLAY = 97
-    LAST_DISPLAY = 106
+    # :100 upwards, above everything anyone else in this repo claims. :0 is
+    # the session; :99 is what RUN_NEUTRINO_DISPLAY falls back to when there
+    # is no session (make/env.mk), and scripts/run_neutrino.sh -- the
+    # underscore one, behind `make run-now', not the run-neutrino.sh this
+    # module execs -- adopts an occupied display instead of refusing it
+    # ("Reusing existing X11 socket"). So a suite sitting on :99 would hand
+    # a developer's `make run' our private Xvfb. Starting above it costs
+    # nothing and needs no exception inside the walk.
+    #
+    # Walking is not what makes the suite parallelisable and does not mean
+    # it is -- the input FIFO is a compile-time path and
+    # require_isolated_run() forbids a second instance anyway. It only keeps
+    # one leftover server from taking every later run down with it.
+    FIRST_DISPLAY = 100
+    LAST_DISPLAY = 109
 
     def __init__(self):
         self.proc = None
@@ -82,6 +89,17 @@ class OwnedDisplay:
             pytest.skip(
                 "no Xvfb: these tests need a display of their own and will "
                 "not borrow the caller's session (install xvfb)"
+            )
+        # Named separately from Xvfb, because without it the failure is
+        # unreadable: _answers() swallows the OSError and reports False
+        # forever, so every candidate starts a healthy Xvfb, waits out the
+        # full timeout and gets killed again -- minutes of it, ending in
+        # "no free display", which is not what went wrong. It lives in
+        # x11-utils, which the host-tool list and setup_deps.sh ask for.
+        if shutil.which("xdpyinfo") is None:
+            pytest.skip(
+                "no xdpyinfo: cannot tell when a private Xvfb is up "
+                "(install x11-utils)"
             )
         for number in range(self.FIRST_DISPLAY, self.LAST_DISPLAY + 1):
             candidate = f":{number}"
@@ -120,10 +138,17 @@ class OwnedDisplay:
         )
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if cls._answers(display):
-                return proc
+            # Our own process first. The other order looks equivalent and is
+            # not: when a parallel starter wins the number, ours exits on the
+            # lock while theirs begins to answer, and asking the display
+            # first would accept THEIR server as our success -- handing back
+            # a display we do not own, with a dead Popen to close. That is
+            # the exact failure this walk exists to end, so it must not be
+            # rebuilt one level down.
             if proc.poll() is not None:
                 return None
+            if cls._answers(display):
+                return proc
             time.sleep(0.25)
         proc.terminate()
         try:

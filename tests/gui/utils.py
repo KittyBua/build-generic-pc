@@ -41,8 +41,9 @@ def ensure_neutrino_running() -> None:
     through make and got nothing -- and the old code then joined the empty
     string with the prefix and stat'ed the RELATIVE path `usr/bin/neutrino'
     against the current directory. Never there, so ten of the twelve files
-    that reach this guard skipped whole, and the message named no path to
-    go looking for.
+    that reach this guard skipped whole when run on their own -- eight in a
+    full-suite run, for the reason in the next paragraph -- and the message
+    named no path to go looking for.
 
     Two of the twelve carried a private os.environ.setdefault of exactly
     this value. That leaked: setdefault mutates the session, so in a bare
@@ -53,8 +54,10 @@ def ensure_neutrino_running() -> None:
     So fall back to the default install dir instead of to nothing, beside
     NEUTRINO_PREFIX's hard-coded default: one of the two inputs having a
     default and the other not was the whole defect. A checkout that moved
-    OUTPUT_DIR still has to say so, and the skip names the path it tried,
-    so that case reads in one line instead of costing a run.
+    OUTPUT_DIR still has to say so -- unless an older build left a tree at
+    the default, which this then accepts without a word, where the empty
+    string used to skip. The skip names the path it tried, so the case that
+    does surface reads in one line instead of costing a run.
     """
     install_dir = os.environ.get("NEUTRINO_INSTALL_DIR") or _DEFAULT_INSTALL_DIR
     prefix = os.environ.get("NEUTRINO_PREFIX", "/usr")

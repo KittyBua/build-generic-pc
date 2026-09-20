@@ -3,7 +3,12 @@
 HOSTTOOLS_DIR ?= $(ROOT_DIR)/hosttools
 
 # Core tools we expect from the host. Extend as needed (build, test, packaging).
-HOSTTOOLS_BINARIES ?= gcc g++ pkg-config cmake ninja make python3 tesseract fbgrab Xvfb xvfb-run evtest git rsync
+# xdpyinfo (x11-utils) sits beside Xvfb on purpose: the GUI suite starts its
+# own Xvfb and has no other way to tell when it is up, so a host with the
+# server but not the probe skips every isolated test after minutes of
+# waiting. xwininfo comes from the same package and is the softer case --
+# root_children() degrades to an empty set.
+HOSTTOOLS_BINARIES ?= gcc g++ pkg-config cmake ninja make python3 tesseract fbgrab Xvfb xvfb-run xdpyinfo xwininfo evtest git rsync
 
 .PHONY: hosttools hosttools-clean
 hosttools: ## Stage a symlinked host toolchain under ./hosttools and prepend it to PATH
