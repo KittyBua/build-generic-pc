@@ -35,12 +35,11 @@ from pathlib import Path
 import pytest
 
 from .neutrino_run import NEUTRINO_DATA, IsolatedNeutrino, require_isolated_run, send_keys
-from .test_screencap_api import (  # noqa: F401 -- neutrino/private_display are fixtures
+from .test_screencap_api import (  # noqa: F401 -- neutrino is a fixture
     _get,
     _require_fresh_binary,
     _settle_startup,
     neutrino,
-    private_display,
 )
 
 # CRCInput::RC_games, Neutrino's factory default for key_screenshot and
@@ -180,11 +179,11 @@ def _start(workdir: Path, display: str, shots_dir: str, count: int) -> IsolatedN
 
 
 @pytest.fixture
-def series(tmp_path: Path, private_display):  # noqa: F811
+def series(tmp_path: Path, owned_display):
     workdir = tmp_path / "series"
     shots = workdir / "shots"
     shots.mkdir(parents=True)
-    instance = _start(workdir, private_display.display, str(shots), SHOTS)
+    instance = _start(workdir, owned_display.display, str(shots), SHOTS)
     try:
         yield instance, shots
     finally:
@@ -251,7 +250,7 @@ def test_every_capture_gets_its_own_file(series):
 
 
 @pytest.mark.gui
-def test_unwritable_dir_falls_back_to_tmp(tmp_path, private_display):  # noqa: F811
+def test_unwritable_dir_falls_back_to_tmp(tmp_path, owned_display):
     """An unwritable screenshot_dir does not lose the shot, and does not
     pretend the shot went where it was asked to go.
 
@@ -271,7 +270,7 @@ def test_unwritable_dir_falls_back_to_tmp(tmp_path, private_display):  # noqa: F
     """
     configured = "/proc/nonexistent/shots"
     workdir = tmp_path / "fallback"
-    instance = _start(workdir, private_display.display, configured, 1)
+    instance = _start(workdir, owned_display.display, configured, 1)
     written = []
     try:
         send_keys(KEY_SCREENSHOT, settle_for=0.0)
@@ -435,7 +434,7 @@ def test_http_marks_a_missing_layer_instead_of_calling_it_clean(neutrino):  # no
 
 
 @pytest.mark.gui
-def test_shutdown_during_a_series_ends(tmp_path, private_display):  # noqa: F811
+def test_shutdown_during_a_series_ends(tmp_path, owned_display):
     """SIGTERM with a series still in the queue ends, and does not crash.
 
     The worker is stopped, not abandoned: CScreencapService::stop() runs
@@ -448,7 +447,7 @@ def test_shutdown_during_a_series_ends(tmp_path, private_display):  # noqa: F811
     workdir = tmp_path / "shutdown"
     shots = workdir / "shots"
     shots.mkdir(parents=True)
-    instance = _start(workdir, private_display.display, str(shots), SHOTS)
+    instance = _start(workdir, owned_display.display, str(shots), SHOTS)
     try:
         time.sleep(INFOBAR_GONE)
         # No settle: SIGTERM has to arrive while the queue still has jobs

@@ -44,7 +44,6 @@ import pytest
 from . import utils
 from .neutrino_run import (
     IsolatedNeutrino,
-    OwnedDisplay,
     debug_logging_built_in,
     require_isolated_run,
     require_no_frontend,
@@ -235,25 +234,6 @@ def _start(tmp_path: Path, display: str, name: str) -> IsolatedNeutrino:
     return instance
 
 
-@pytest.fixture
-def private_display(monkeypatch):
-    """A display of this test's own, never the developer's session.
-
-    OwnedDisplay prefers an answering DISPLAY, and on a desktop that means the
-    screenshots below would catch whatever window happens to overlap Neutrino
-    -- `import -window` reads back the frame buffer, not the window's own
-    contents. Dropping DISPLAY first forces the private Xvfb, where Neutrino is
-    the only thing on screen. Measured: with the session display, the OCR of a
-    ZDFsport shot came back full of editor text.
-    """
-    monkeypatch.delenv("DISPLAY", raising=False)
-    display = OwnedDisplay()
-    try:
-        yield display
-    finally:
-        display.close()
-
-
 def _resolve_evidence(instance: IsolatedNeutrino, script: str) -> str:
     return "\n".join(
         line for line in instance.log.read_text(errors="replace").splitlines()
@@ -278,7 +258,7 @@ def _zap_and_wait(api: _Api, instance: IsolatedNeutrino, bouquet_title: str,
 
 
 @pytest.mark.gui
-def test_webtv_scripts_resolve_without_looping(tmp_path: Path, private_display) -> None:
+def test_webtv_scripts_resolve_without_looping(tmp_path: Path, owned_display) -> None:
     _require_fresh_binary()
     require_isolated_run()
     require_no_frontend()
@@ -287,7 +267,7 @@ def test_webtv_scripts_resolve_without_looping(tmp_path: Path, private_display) 
     _require_network()
     _line_buffered_env()
 
-    instance = _start(tmp_path, private_display.display, "webtv")
+    instance = _start(tmp_path, owned_display.display, "webtv")
     api = _Api()
     try:
         # ---- oracle 1: every source loaded, the YouTube list is complete ----
@@ -322,7 +302,7 @@ def test_webtv_scripts_resolve_without_looping(tmp_path: Path, private_display) 
             + "\n".join(instance.log.read_text(errors="replace").splitlines()[-10:])
         )
         shot = tmp_path / "zdfsport.png"
-        settle(shot, private_display.display, tries=10)
+        settle(shot, owned_display.display, tries=10)
         screen = utils.ocr_image(shot)
         log = instance.log.read_text(errors="replace")
         assert "resolved stream" in log or "ZDFsport" in screen, (
@@ -342,7 +322,7 @@ def test_webtv_scripts_resolve_without_looping(tmp_path: Path, private_display) 
 
         send_keys("MENU", settle_for=4.0)
         menu_shot = tmp_path / "mainmenu.png"
-        settle(menu_shot, private_display.display, tries=10)
+        settle(menu_shot, owned_display.display, tries=10)
         menu_text = utils.ocr_image(menu_shot)
         assert "instellungen" in menu_text, (
             "the main menu did not open after the script menu was closed, so the "
@@ -354,7 +334,7 @@ def test_webtv_scripts_resolve_without_looping(tmp_path: Path, private_display) 
         before = _zap_and_wait(api, instance, "Sportschau Livestreams", "sportschau")
         time.sleep(8)
         shot = tmp_path / "sportschau.png"
-        settle(shot, private_display.display, tries=10)
+        settle(shot, owned_display.display, tries=10)
         screen = utils.ocr_image(shot)
         log = instance.log.read_text(errors="replace")
         assert "resolved stream" in log or "Sportschau" in screen, (
@@ -377,7 +357,7 @@ def test_webtv_scripts_resolve_without_looping(tmp_path: Path, private_display) 
 # that predated the fix (see _require_fresh_binary). With the listener in
 # place the menu stands alone; this pins it.
 def test_reading_hint_is_hidden_while_a_script_shows_its_menu(
-    tmp_path: Path, private_display
+    tmp_path: Path, owned_display
 ) -> None:
     _require_fresh_binary()
     require_isolated_run()
@@ -391,7 +371,7 @@ def test_reading_hint_is_hidden_while_a_script_shows_its_menu(
     _require_network()
     _line_buffered_env()
 
-    instance = _start(tmp_path, private_display.display, "hint")
+    instance = _start(tmp_path, owned_display.display, "hint")
     api = _Api()
     try:
         api.wait_until_up(instance)
@@ -402,7 +382,7 @@ def test_reading_hint_is_hidden_while_a_script_shows_its_menu(
         for index in range(3):
             time.sleep(6)
             shot = tmp_path / f"hint-{index}.png"
-            settle(shot, private_display.display, tries=8)
+            settle(shot, owned_display.display, tries=8)
             text = utils.ocr_image(shot)
             if "ZDFsport" not in text and "resolved stream" in instance.log.read_text(errors="replace"):
                 pytest.skip("a live event is running: the script resolves instead of showing its menu")

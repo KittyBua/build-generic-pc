@@ -26,7 +26,6 @@ import pytest
 from . import utils
 from .neutrino_run import (
     IsolatedNeutrino,
-    OwnedDisplay,
     require_isolated_run,
     require_no_frontend,
     send_keys,
@@ -40,14 +39,15 @@ NHTTPD_CONF = (
     / "root" / "usr" / "var" / "tuxbox" / "config" / "nhttpd.conf"
 )
 
-# OwnedDisplay's private Xvfb is a fixed 1280x720 (neutrino_run.py:50), and
-# the GL window fills it exactly: measured, not assumed -- a real capture
-# on this fixture comes back at precisely 1280x720. Asserting that exact
-# figure (not just "> 0") is strictly tighter without hardcoding a box
-# resolution: a stride, half-buffer or zero-size regression in the legacy
-# conversion would produce some *other* number and get caught, where a
-# bare positivity check would wave it through. 1920x1080 is not expected
-# here (see the module docstring) -- this is the window's own size.
+# OwnedDisplay's private Xvfb is a fixed 1280x720 (neutrino_run.py, "The
+# screen is a fixed 1280x720"), and the GL window fills it exactly:
+# measured, not assumed -- a real capture on this fixture comes back at
+# precisely 1280x720. Asserting that exact figure (not just "> 0") is
+# strictly tighter without hardcoding a box resolution: a stride,
+# half-buffer or zero-size regression in the legacy conversion would
+# produce some *other* number and get caught, where a bare positivity
+# check would wave it through. 1920x1080 is not expected here (see the
+# module docstring) -- this is the window's own size.
 EXPECTED_OSD_W = 1280
 EXPECTED_OSD_H = 720
 
@@ -177,18 +177,7 @@ def _unique_colors(png: Path) -> int:
 
 
 @pytest.fixture
-def private_display(monkeypatch):
-    """A display of this test's own -- never the developer's session."""
-    monkeypatch.delenv("DISPLAY", raising=False)
-    display = OwnedDisplay()
-    try:
-        yield display
-    finally:
-        display.close()
-
-
-@pytest.fixture
-def neutrino(tmp_path: Path, private_display):
+def neutrino(tmp_path: Path, owned_display):
     _require_fresh_binary()
     require_isolated_run()
     require_no_frontend()
@@ -212,7 +201,7 @@ def neutrino(tmp_path: Path, private_display):
     # require_isolated_run() above already guarantees no other neutrino.real
     # is running, so nothing can be reading the file we are about to remove.
     Path(os.environ.get("NEUTRINO_INPUT_FIFO", "/tmp/neutrino.input")).unlink(missing_ok=True)
-    instance = IsolatedNeutrino(workdir, private_display.display, simulate_fe="0")
+    instance = IsolatedNeutrino(workdir, owned_display.display, simulate_fe="0")
     try:
         _settle_startup(instance)
         _wait_until_up(instance)
