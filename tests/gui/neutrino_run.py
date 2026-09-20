@@ -33,31 +33,104 @@ NEUTRINO_DATA = ROOT_DIR / "sources" / "neutrino" / "data"
 
 
 class OwnedDisplay:
-    """Use the caller's DISPLAY when it answers, else run a private Xvfb.
+    """A display of this run's own: always a private Xvfb, never the
+    caller's session.
 
-    A missing DISPLAY used to skip these tests, and a skipped guard passes
-    hardest when things are broken -- so bring the display along instead."""
+    This used to take $DISPLAY whenever it answered and fall back to Xvfb
+    only otherwise -- and that preference is the trap the class now exists
+    to close. On a developer machine with a desktop session $DISPLAY is the
+    real screen, so an isolated run started its own Neutrino correctly and
+    then photographed the wrong thing: settle() grabs the root window, and
+    `import -window root' reads the frame buffer rather than one
+    application's output. Measured: one run's OCR came back with the
+    desktop clock ('00:46 / Freitag, 4. September 2026'), and with the
+    session display, the OCR of a ZDFsport shot came back full of editor
+    text. The tests then fail for reasons that have nothing to do with
+    Neutrino, and because `make test-gui' passes --maxfail=1, the first
+    such failure takes the whole suite with it. `env -u DISPLAY' was the
+    workaround everybody ended up finding on their own; doing it here,
+    once, means nobody has to.
+
+    A missing DISPLAY is still no reason to skip -- a skipped guard passes
+    hardest when things are broken, so bring the display along instead.
+
+    The screen is a fixed 1280x720 and tests assert exactly that figure
+    (test_screencap_api.py, EXPECTED_OSD_W/H). Change both or neither.
+
+    Watching a run is not what this is for: there is deliberately no
+    variable that points it back at a session, because that is the same
+    door under another name. `x11vnc -display :97' looks in from outside.
+
+    The attaching tests (test_menu.py, test_overlay_paint.py,
+    test_input_dialog.py) do not come through here at all: they drive a
+    Neutrino the developer started and need the ambient DISPLAY.
+    """
+
+    # :97 upwards. High enough to clear a session (:0) and the manual
+    # runtime display scripts/run-neutrino.sh uses (:99). Walking is not
+    # what makes the suite parallelisable and does not mean it is -- the
+    # input FIFO is a compile-time path and require_isolated_run() forbids
+    # a second instance anyway. It only keeps one leftover server from
+    # taking every later run down with it.
+    FIRST_DISPLAY = 97
+    LAST_DISPLAY = 106
 
     def __init__(self):
         self.proc = None
-        self.display = os.environ.get("DISPLAY")
-        if self.display and self._answers(self.display):
-            return
+        self.display = None
         if shutil.which("Xvfb") is None:
-            pytest.skip("no working DISPLAY and no Xvfb to start one")
-        self.display = ":97"
-        self.proc = subprocess.Popen(
-            ["Xvfb", self.display, "-screen", "0", "1280x720x24"],
+            pytest.skip(
+                "no Xvfb: these tests need a display of their own and will "
+                "not borrow the caller's session (install xvfb)"
+            )
+        for number in range(self.FIRST_DISPLAY, self.LAST_DISPLAY + 1):
+            candidate = f":{number}"
+            # Somebody else's server on this number: a second suite, or a
+            # leftover from a killed run. Xvfb would refuse it, and the
+            # refusal is silent because stderr goes to DEVNULL -- the code
+            # that took :97 on faith then watched the *foreign* server
+            # answer, called that success, and kept a dead Popen as
+            # self.proc while handing back a display it did not own.
+            if self._answers(candidate):
+                continue
+            proc = self._start(candidate)
+            if proc is not None:
+                self.proc = proc
+                self.display = candidate
+                return
+        pytest.skip(
+            f"no free display between :{self.FIRST_DISPLAY} and "
+            f":{self.LAST_DISPLAY} for a private Xvfb"
+        )
+
+    @classmethod
+    def _start(cls, display: str):
+        """A live Xvfb on `display`, or None so the caller tries the next.
+
+        Polls for the server rather than trusting Popen: Xvfb forks into
+        place and is not answering yet when it returns. It also exits at
+        once on a stale /tmp/.X<n>-lock, which is why poll() is checked --
+        without it the loop would question a dead process for 15 seconds
+        and then blame the timeout.
+        """
+        proc = subprocess.Popen(
+            ["Xvfb", display, "-screen", "0", "1280x720x24"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if self._answers(self.display):
-                return
+            if cls._answers(display):
+                return proc
+            if proc.poll() is not None:
+                return None
             time.sleep(0.25)
-        self.close()
-        pytest.skip("private Xvfb did not come up")
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return None
 
     @staticmethod
     def _answers(display: str) -> bool:
