@@ -14,6 +14,16 @@ on:
         description: 'Keep this build: publish it as a permanent release as well'
         type: boolean
         default: false
+  schedule:
+    # Once a month, so the monthly Tuxbox-OS image release can link a package
+    # built from roughly the same source state instead of whatever was last
+    # produced by hand. This is not the nightly the comment below argues
+    # against: it fires with the release rhythm, not on its own.
+    #
+    # Ahead of the image build, which starts at 04:30 UTC, and deliberately
+    # not on the hour - scheduled runs queue behind everyone else's, and a
+    # few minutes of drift cost nothing here.
+    - cron: '17 2 1 * *'
   # No schedule. It fires only from the default branch, so it never ran while
   # this file lived on dx; now that it sits on master it would wake up and
   # build nightly for no reason. A nightly worth having watches the Neutrino
@@ -94,6 +104,7 @@ jobs:
     name: Build (${{ matrix.slug }})
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -153,6 +164,7 @@ jobs:
     # switching this job off.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       startsWith(github.ref, 'refs/tags/')
     # Deliberately not a container job, unlike build above. The verification step
     # starts its own `docker run --privileged` to prove the package runs on a
@@ -254,7 +266,9 @@ jobs:
     # answer that by accident. `needs` carries the rest -- a build that failed
     # verification never reaches this job, so nothing here has to ask for
     # success() by hand.
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    if: >-
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+      && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     # The reason this is a job of its own: it is the only place with a write
     # token, and it runs none of the code the build job clones. What it checks
@@ -300,7 +314,10 @@ jobs:
       # into a build log, and the package name alone cannot tell two builds
       # apart -- scripts/release_tag.sh explains what the tag has to name.
       - name: Archive this build permanently
-        if: inputs.archive
+        # The monthly run archives by definition: it is the package the image
+        # release points at, so it has to stay reachable after the next build
+        # replaces the rolling latest.
+        if: inputs.archive || github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
           ARCHIVE_TAG: ${{ needs.appimage.outputs.archive_tag }}
